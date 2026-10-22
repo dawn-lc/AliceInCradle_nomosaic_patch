@@ -30,7 +30,18 @@ namespace AicNoMosaic
                 if (!File.Exists(path)) return "";
                 var fi = new FileInfo(path);
                 if (fi.Length < 64 || fi.Length > MaxFileBytes) return "";
-                return ExtractVersion(File.ReadAllBytes(path));
+                return FromBytes(File.ReadAllBytes(path));
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>字节级入口（测试/诊断用）：行为与 FromFolder 的文件解析部分完全一致。</summary>
+        internal static string FromBytes(byte[] bytes)
+        {
+            try
+            {
+                if (bytes == null || bytes.Length < 64 || bytes.Length > MaxFileBytes) return "";
+                return ExtractVersion(bytes) ?? "";
             }
             catch { return ""; }
         }
@@ -89,7 +100,7 @@ namespace AicNoMosaic
 
         // ============================== 核心提取 =============================
 
-        private static string ExtractVersion(byte[] b)
+        internal static string ExtractVersion(byte[] b)
         {
             if (b.Length < 64) return null;
 
@@ -150,7 +161,7 @@ namespace AicNoMosaic
 
         // ============================ 类型表 ================================
 
-        private static bool TryReadClassIds(byte[] b, int start, int typeCount,
+        internal static bool TryReadClassIds(byte[] b, int start, int typeCount,
             out List<int> classIds, out int next)
         {
             classIds = new List<int>(Math.Min(typeCount, 100000));
@@ -170,7 +181,7 @@ namespace AicNoMosaic
 
         // ============================ 对象表 ================================
 
-        private readonly struct ObjInfo
+        internal readonly struct ObjInfo
         {
             public readonly int Start;               // 数据区内偏移
             public readonly int Size;
@@ -183,8 +194,9 @@ namespace AicNoMosaic
         /// <summary>
         /// 只用文件自身的结构约束判定"这里是不是真的对象表"（与内容无关）：
         /// 数量合理、表不越过数据区、byteStart 单调不减且间隙 &lt;64、对象都落在数据区内。
+        /// 条目 = pathID(i64) + byteStart(u64) + size(u32) + typeId(i32) = 24B（实证 0.30i 亦如此）。
         /// </summary>
-        private static bool TryReadObjectTable(byte[] b, int countPos,
+        internal static bool TryReadObjectTable(byte[] b, int countPos,
             ulong dataOffset, ulong fileSize, List<int> classIds,
             List<ObjInfo> objects, ulong tailSlack)
         {
@@ -195,7 +207,7 @@ namespace AicNoMosaic
             if (count < 1 || count > 200000) return false;
 
             int first = AlignUp(countPos + 4, 8);
-            if (first > b.Length || count * 24 > b.Length - first) return false;
+            if (first > b.Length || (long)count * 24 > b.Length - first) return false;
             if ((ulong)(first - countPos) + (ulong)count * 24UL > dataOffset - (ulong)countPos) return false;
 
             ulong dataSize = fileSize - dataOffset;
@@ -203,11 +215,11 @@ namespace AicNoMosaic
             long prev = 0;
             for (int i = 0; i < count; i++)
             {
-                p += 8;                                                        // int64 pathID（用不到）
+                p += 8;                                                        // int64 pathID
                 long byteStart = unchecked((long)BinaryPrimitives.ReadUInt64LittleEndian(b.AsSpan(p)));
                 uint byteSize = BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan(p + 8));
                 int typeId = BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(p + 12));
-                p += 20;
+                p += 16;                                                       // 8 + 16 = 24B/条目
 
                 if (byteStart < 0 || byteStart < prev || byteStart - prev > 64) return false;
                 if ((ulong)byteStart + byteSize > dataSize) return false;
@@ -224,7 +236,7 @@ namespace AicNoMosaic
 
         // ================== PlayerSettings 定位与版本串 ======================
 
-        private static ObjInfo? FindPlayerSettings(byte[] b, int dataOffset, List<ObjInfo> objects)
+        internal static ObjInfo? FindPlayerSettings(byte[] b, int dataOffset, List<ObjInfo> objects)
         {
             foreach (var o in objects)
                 if (o.ClassId == 129) return o;
@@ -254,7 +266,7 @@ namespace AicNoMosaic
         }
 
         /// <summary>按已知相对偏移读取 bundleVersion 串（做完整校验）。</summary>
-        private static string TryReadVersionField(ReadOnlySpan<byte> obj, int? rel)
+        internal static string TryReadVersionField(ReadOnlySpan<byte> obj, int? rel)
         {
             if (rel == null || rel.Value + 4 > obj.Length) return null;
 
@@ -275,7 +287,7 @@ namespace AicNoMosaic
 
         // ============================ 序列化串扫描 ===========================
 
-        private readonly struct StrCandidate
+        internal readonly struct StrCandidate
         {
             public readonly int Offset;           // 对象内相对偏移（指向长度前缀）
             public readonly string Value;
@@ -283,7 +295,7 @@ namespace AicNoMosaic
             public StrCandidate(int offset, string value) { Offset = offset; Value = value; }
         }
 
-        private static (List<StrCandidate> versions, List<string> bundleIds) CollectSerializedStrings(
+        internal static (List<StrCandidate> versions, List<string> bundleIds) CollectSerializedStrings(
             ReadOnlySpan<byte> obj, bool wantVersions, bool wantBundleIds)
         {
             var versions = wantVersions ? new List<StrCandidate>() : null;
@@ -343,16 +355,16 @@ namespace AicNoMosaic
                     continue;
                 }
 
-                // 末段: 数字 + 可选单字母 + 可选数字（"29" / "29b" / "29b2"）
+                // 末段: 数字 +（可选）单字母 +（可选）数字 —— "29" / "29b" / "29b2" / "30i"
                 int digits = 0;
                 while (digits < part.Length && IsAsciiDigit(part[digits])) digits++;
                 if (digits == 0) return false;
                 if (digits == part.Length) return true;
 
-                if (digits + 1 > part.Length - digits) return false; // 只允许 1 个字母
+                int rest = part.Length - digits;               // 数字之后的剩余部分
+                if (rest > 2) return false;                    // 只允许 字母 或 字母+1位数字
                 if (!IsAsciiLetter(part[digits])) return false;
-                int trailing = part.Length - (digits + 1);
-                return trailing == 0 || (trailing == 1 && IsAsciiDigit(part[digits + 1]));
+                return rest == 1 || IsAsciiDigit(part[digits + 1]);
             }
             return true;
         }
@@ -369,7 +381,6 @@ namespace AicNoMosaic
             }
             return dots >= 2;
         }
-
         private static bool IsDigits(string s)
         {
             if (s.Length == 0) return false;

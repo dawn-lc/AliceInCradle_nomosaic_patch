@@ -36,8 +36,8 @@ namespace AicPatchTester
             if (args.Length > 0 && File.Exists(args[0]))
                 failures += RunSyntheticTests(args[0]);
 
-            // —— GameVersion：真实 128B 头部探针 + 目录名兜底 ——
-            failures += RunGameVersionTests();
+            // —— GameVersion：真实 128B 头部探针 + 全管线合成样本 ——
+            failures += RunGameVersionTests(args);
 
             // —— DebugConfig 回归：对 _debug.txt 验证读取/改写/逐字节保留 ——
             foreach (string arg in args)
@@ -322,9 +322,9 @@ namespace AicPatchTester
             "00ffff592e035c5fc203d9bbeebadbc7" +
             "9487184000000000ffff3d9597d15b2b";
 
-        private static int RunGameVersionTests()
+        private static int RunGameVersionTests(string[] args)
         {
-            Console.WriteLine("== GameVersion（真实头部 128B 探针 + 目录名兜底）");
+            Console.WriteLine("== GameVersion（真实头部 128B 探针 + 全管线合成样本）");
             _synthFailures = 0;
 
             // —— 头部探针：128B 截断样本（不需要完整文件！）——
@@ -337,16 +337,114 @@ namespace AicPatchTester
             Expect("H5 dataOffset=1184", h.DataOffset == 1184UL);
             Expect("H6 引擎=2022.3.62f2", h.EngineVersion == "2022.3.62f2");
 
-            // —— 无 globalgamemanagers 的目录 → 直接"未知"（不做目录名兜底）——
-            string baseDir = Path.Combine(Path.GetTempPath(), "aic_gv_empty");
-            string dEmpty = Path.Combine(baseDir, "EmptyGameRoot");
-            Directory.CreateDirectory(Path.Combine(dEmpty, "AliceInCradle_Data"));   // 目录存在但无文件
-            Expect("G1 无文件 → 空（UI 显示未知）",
-                AicNoMosaic.GameVersion.FromFolder(dEmpty) == "");
+            // —— 全管线合成样本：手工构造含 bundleVersion="0.30i" 的 globalgamemanagers ——
+            //（防止"头部探针通过、L5 版本串判定失败"这类静默回归溜过测试）
+            byte[] synth = BuildSyntheticGlobalGameManager("2022.3.62f2", "0.30i");
+            Expect("V1 合成样本解析=0.30i",
+                AicNoMosaic.GameVersion.FromBytes(synth) == "0.30i");
 
-            try { Directory.Delete(baseDir, true); } catch { }
+            byte[] broken = BuildSyntheticGlobalGameManager("2022.3.62f2", "zzzZ!");
+            Expect("V2 非版本串 → 空（UI 显示未知）",
+                AicNoMosaic.GameVersion.FromBytes(broken) == "");
+
+            // —— 真实样本：参数目录旁发现 globalgamemanagers 时做实证断言 ——
+            foreach (string arg in args)
+            {
+                string dir = Path.GetDirectoryName(Path.GetFullPath(arg)) ?? ".";
+                string ggm = Path.Combine(dir, "globalgamemanagers");
+                if (!File.Exists(ggm)) continue;
+                string real = AicNoMosaic.GameVersion.FromBytes(File.ReadAllBytes(ggm));
+                Expect("G真实样本解析非空", !string.IsNullOrEmpty(real));
+                Console.WriteLine("   真实样本版本 = " + real);
+                break;   // 一个真实样本足矣
+            }
+
+            Expect("G1 无文件目录 → 空（UI 显示未知）",
+                AicNoMosaic.GameVersion.FromFolder(
+                    Path.Combine(Path.GetTempPath(), "aic_gv_empty_missing_dir_42")) == "");
+
             Console.WriteLine(_synthFailures == 0 ? "   [OK] GameVersion 全部通过" : ("   有 " + _synthFailures + " 个失败"));
             return _synthFailures;
+        }
+
+        /// <summary>
+        /// 构造最小但结构完全合规的 globalgamemanagers：
+        /// 引擎 2022.3（无类型树）、类型表 2 项（129 PlayerSettings / 1 GameObject）、
+        /// 对象表 1 项指向 PlayerSettings 数据块（byteStart=0、typeId=0）、
+        /// bundleVersion 长度前缀位于对象内 612（2022.3 已知布局）。用于完整验证解析快路。
+        /// </summary>
+        private static byte[] BuildSyntheticGlobalGameManager(string engine, string bundleVersion)
+        {
+            byte[] engineBytes = Encoding.ASCII.GetBytes(engine);
+            byte[] verBytes = Encoding.ASCII.GetBytes(bundleVersion);
+
+            const int typeStart = 69;                      // AlignUp(48+12,4)=60 → +平台4 +tree 1 +count 4 = 69
+            // 对象表布局与解析器约定一致：count 紧跟类型表（不额外对齐），条目起始 8 对齐；
+            // 条目 = pathID(i64) + byteStart(u64) + size(u32) + typeId(i32) = 24B（实证）
+            int objCountPos = typeStart + 2 * 23;          // = 115（两类型项各 23B）
+            int objFirst = AlignUpTester(objCountPos + 4, 8);   // = 120
+            int metaEnd = objFirst + 24;                   // 单对象条目 24B → 144
+            int metaSize = metaEnd - 48;                   // = 96
+            int dataOffset = 48 + ((metaSize + 15) & ~15); // 48 + AlignUp(96,16) = 144
+            const int verRel = 612;                        // 2022.3 已知布局
+
+            byte[] obj = new byte[verRel + 4 + verBytes.Length + (4 - verBytes.Length % 4) % 4];
+            int fileSize = dataOffset + obj.Length;
+            var b = new byte[fileSize];
+
+            void PutInt32LE(int offset, int value)
+            {
+                b[offset] = (byte)value;
+                b[offset + 1] = (byte)(value >> 8);
+                b[offset + 2] = (byte)(value >> 16);
+                b[offset + 3] = (byte)(value >> 24);
+            }
+            void PutInt32BE(int offset, int value)
+            {
+                b[offset] = (byte)(value >> 24);
+                b[offset + 1] = (byte)(value >> 16);
+                b[offset + 2] = (byte)(value >> 8);
+                b[offset + 3] = (byte)value;
+            }
+            void PutInt64BE(int offset, long value)
+            {
+                for (int i = 0; i < 8; i++) b[offset + i] = (byte)(value >> (56 - i * 8));
+            }
+
+            // ---- L1 头（大端）----
+            PutInt32BE(8, 22);
+            PutInt64BE(16, metaSize);
+            PutInt64BE(24, fileSize);
+            PutInt64BE(32, dataOffset);
+
+            // ---- L2 元数据头 ----
+            Array.Copy(engineBytes, 0, b, 48, engineBytes.Length);
+            PutInt32LE(60, 19);                            // targetPlatform
+            b[64] = 0;                                     // enableTypeTree = false
+            PutInt32LE(65, 2);                             // typeCount = 2
+
+            // 类型表：classID + isStripped + scriptTypeIndex(=-1) + 16B 哈希 = 23B/项
+            int p = typeStart;
+            PutInt32LE(p, 129); b[p + 4] = 0; b[p + 5] = 0xFF; b[p + 6] = 0xFF; p += 7;
+            for (int i = 0; i < 16; i++) b[p + i] = (byte)(0xD0 + i); p += 16;
+            PutInt32LE(p, 1); b[p + 4] = 0; b[p + 5] = 0xFF; b[p + 6] = 0xFF; p += 7;
+            for (int i = 0; i < 16; i++) b[p + i] = (byte)(0x10 + i); p += 16;
+            // p == objCountPos（=115，紧跟类型表不额外对齐）
+
+            // ---- 对象表：count 紧跟类型表；条目 8 对齐；24B 含 pathID ----
+            PutInt32LE(objCountPos, 1);
+            int e = objFirst;
+            for (int i = 0; i < 8; i++) b[e + i] = (byte)((long)1 >> (i * 8) & 0xFF);   // pathID = 1
+            for (int i = 0; i < 8; i++) b[e + 8 + i] = 0;              // byteStart = 0
+            PutInt32LE(e + 16, obj.Length);                            // byteSize
+            PutInt32LE(e + 20, 0);                                     // typeId → classIds[0] = 129
+
+            // ---- 数据区：PlayerSettings（bundleVersion @612）----
+            PutInt32LE(dataOffset + verRel, verBytes.Length);
+            Array.Copy(verBytes, 0, b, dataOffset + verRel + 4, verBytes.Length);
+            // 对齐填充保持 0
+
+            return b;
         }
 
         private static byte[] HexToBytes(string hex)
@@ -356,6 +454,8 @@ namespace AicPatchTester
                 bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
             return bytes;
         }
+
+        private static int AlignUpTester(int v, int align) => (v + (align - 1)) & ~(align - 1);
 
         private static bool BuildSynthetic(string hostDll, string outPath, Action<CilBody> filler)
         {
