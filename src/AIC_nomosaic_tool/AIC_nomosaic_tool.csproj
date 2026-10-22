@@ -19,8 +19,11 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
-    <!-- net48 上 Span<T>/BinaryPrimitives 需要 System.Memory（运行时 Win10+ 自带 4.0.1.x binder 亦可，随包发布最稳） -->
-    <PackageReference Include="System.Memory" Version="4.5.5" />
+    <!-- net48 上 Span<T>/BinaryPrimitives 需要 System.Memory；编译期要它的引用程序集，
+         但 4.7.1+ 运行时已内置这些类型（官方 binding redirect），
+         运行目录无须挨个拷贝 —— 下方 ExcludeAssets=runtime 只留编译期引用 -->
+    <PackageReference Include="System.Memory" Version="4.5.5"
+                      ExcludeAssets="runtime" />
   </ItemGroup>
 
   <ItemGroup>

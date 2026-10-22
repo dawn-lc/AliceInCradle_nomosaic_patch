@@ -62,6 +62,7 @@ namespace AicNoMosaic
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("教程文档（工具说明）(&A)", null, (s, e) => OpenUrl(ReadmeUrl)));
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("更新本工具(&U)", null, (s, e) => OpenUrl(ReleasesUrl)));
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("版本信息(&V)", null, (s, e) => ShowAbout()));
+            helpMenu.DropDownItems.Add(new ToolStripMenuItem("版本检测诊断(&G)", null, (s, e) => ShowVersionDiagnostics()));
             menu.Items.Add(fileMenu);
             menu.Items.Add(toolsMenu);
             menu.Items.Add(helpMenu);
@@ -623,6 +624,16 @@ namespace AicNoMosaic
                 "补丁方式：dnlib 进程内修改 MosaicShower.FnDrawMosaic 返回值\n" +
                 "兼容游戏版本：0.21 及之后的版本（自动检测）",
                 "版本信息", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        /// <summary>版本检测自诊断：输出 globalgamemanagers 解析各环节状态，用于远程定位。</summary>
+        private void ShowVersionDiagnostics()
+        {
+            string report = string.IsNullOrEmpty(_gameRoot)
+                ? "请先选择游戏目录再运行诊断。"
+                : GameVersion.Diagnose(_gameRoot);
+            MessageBox.Show(this, report, "版本检测诊断 — " + _gameRoot,
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
     }
 }

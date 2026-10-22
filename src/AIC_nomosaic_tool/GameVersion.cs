@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 
@@ -44,6 +45,74 @@ namespace AicNoMosaic
                 return ExtractVersion(bytes) ?? "";
             }
             catch { return ""; }
+        }
+
+        /// <summary>
+        /// 全流程自诊断：返回多行报告（文件存在性/大小/头部各字段/类型表/对象表/
+        /// PlayerSettings/版本串），"未知"时用于定位在哪个环节失败。不抛异常。
+        /// </summary>
+        internal static string Diagnose(string gameFolder)
+        {
+            var sb = new StringBuilder();
+            try
+            {
+                string path = string.IsNullOrEmpty(gameFolder)
+                    ? ""
+                    : Path.Combine(gameFolder, DataFolder, FileName);
+                sb.AppendLine("文件路径: " + path);
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                {
+                    sb.AppendLine("结论: globalgamemanagers 不存在");
+                    return sb.ToString();
+                }
+
+                long len = new FileInfo(path).Length;
+                sb.AppendLine("文件大小: " + len.ToString("N0") + " 字节");
+                if (len < 64 || len > MaxFileBytes)
+                {
+                    sb.AppendLine("结论: 大小超出 64B..64MB 范围，拒绝解析");
+                    return sb.ToString();
+                }
+
+                byte[] b = File.ReadAllBytes(path);
+                sb.AppendLine("读取长度: " + b.Length.ToString("N0"));
+
+                HeadInfo h = ParseHead(b);
+                sb.AppendLine("头部: Ok=" + h.Ok
+                    + " 格式版本=" + h.FormatVersion
+                    + " 元数据=" + h.MetadataSize
+                    + " 声明大小=" + h.FileSize
+                    + " 数据区=" + h.DataOffset
+                    + " 引擎=" + (h.EngineVersion ?? "(无)"));
+                if (!h.Ok)
+                {
+                    sb.AppendLine("结论: 头部结构自洽性校验失败");
+                    return sb.ToString();
+                }
+                sb.AppendLine((h.FileSize == (ulong)b.Length
+                    ? "声明大小与实际一致 ✓"
+                    : "!! 声明大小(" + h.FileSize + ") ≠ 实际(" + b.Length + ") —— 此为拒绝点之一"));
+
+                if (FromBytes(b) != "")
+                {
+                    sb.AppendLine("最终解析: " + FromBytes(b));
+                }
+                else
+                {
+                    sb.AppendLine("下游（类型表/对象表/PlayerSettings/版本串）某环节失败，");
+                    sb.AppendLine("并把文件前 128 字节附下（可对照上报）:");
+                    var hex = new StringBuilder(Math.Min(128, b.Length) * 2);
+                    for (int i = 0; i < Math.Min(128, b.Length); i++)
+                        hex.Append(b[i].ToString("x2", CultureInfo.InvariantCulture));
+                    sb.AppendLine(hex.ToString());
+                }
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("!! 诊断过程异常: " + ex.GetType().Name + " " + ex.Message);
+                return sb.ToString();
+            }
         }
 
         // ============================ 容器头 ================================
