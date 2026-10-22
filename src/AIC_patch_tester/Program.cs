@@ -35,6 +35,14 @@ namespace AicPatchTester
             if (args.Length > 0 && File.Exists(args[0]))
                 failures += RunSyntheticTests(args[0]);
 
+            // —— DebugConfig 回归：对 _debug.txt 验证读取/改写/逐字节保留 ——
+            foreach (string arg in args)
+            {
+                string debugTxt = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(arg)) ?? ".", "_debug.txt");
+                if (File.Exists(debugTxt))
+                    failures += RunDebugConfigTests(debugTxt);
+            }
+
             foreach (string dll in args)
             {
                 if (!File.Exists(dll))
@@ -116,6 +124,96 @@ namespace AicPatchTester
         private static void TryDelete(string path)
         {
             try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+
+        // ==================================================================
+        //  DebugConfig 回归：_debug.txt 读取/改写/逐字节保留
+        // ==================================================================
+
+        private static int RunDebugConfigTests(string debugTxt)
+        {
+            Console.WriteLine("== DebugConfig（" + Path.GetFileName(debugTxt) + "，样本含未知键/下行注释/超长行）");
+            int failures = 0;
+            string backup = debugTxt + ".tester_orig";
+            string work = Path.Combine(Path.GetTempPath(), "aic_debugcfg_test");
+            try
+            {
+                Directory.CreateDirectory(work);
+                string testFile = Path.Combine(work, "_debug.txt");
+                File.Copy(debugTxt, testFile, true);
+                byte[] original = File.ReadAllBytes(testFile);
+
+                // 1) 读取：六个键全部有效且与玩家样本一致
+                var entries = new AicNoMosaic.DebugConfig.Entry[AicNoMosaic.DebugConfig.KeyCount];
+                Expect("R1 读取成功", AicNoMosaic.DebugConfig.TryRead(testFile, entries));
+                int[] expectRead = { 1, 1, 1, 0, 1, 1 };   // <DEBUG>/mighty/nodamage/weak/allskill/announce
+                bool readOk = true;
+                for (int i = 0; i < entries.Length; i++)
+                    if (!entries[i].Valid || entries[i].Value != expectRead[i]) { readOk = false; break; }
+                Expect("R2 六键值与样本一致", readOk);
+
+                // 2) 写入：全改反（1→0 / 0→1）
+                for (int i = 0; i < entries.Length; i++)
+                    entries[i].Value = entries[i].Value == 0 ? 1 : 0;
+                Expect("W1 写入成功", AicNoMosaic.DebugConfig.TryWrite(testFile, entries));
+
+                // 3) 回读全部反转
+                var recheck = new AicNoMosaic.DebugConfig.Entry[AicNoMosaic.DebugConfig.KeyCount];
+                AicNoMosaic.DebugConfig.TryRead(testFile, recheck);
+                bool reversed = true;
+                for (int i = 0; i < recheck.Length; i++)
+                    if (recheck[i].Value != (expectRead[i] == 0 ? 1 : 0)) { reversed = false; break; }
+                Expect("R3 回读已全部反转", reversed);
+
+                // 4) 逐字节保留：除 6 个目标数值字符外，其余字节必须完全一致
+                byte[] updated = File.ReadAllBytes(testFile);
+                Console.WriteLine("   原始 " + original.Length + " B → 写后 " + updated.Length + " B");
+                if (original.Length != updated.Length)
+                {
+                    Console.WriteLine("   [FAIL] 文件长度改变（不允许）");
+                    failures++;
+                }
+                else
+                {
+                    int diff = 0;
+                    for (int i = 0; i < original.Length; i++)
+                        if (original[i] != updated[i]) diff++;
+                    Expect("W2 除目标数值外逐字节不变（恰好 6 字节差异）", diff == 6);
+                }
+
+                // 5) 幂等：同样再写一次 → TryWrite 应无改动且成功
+                Expect("W3 幂等重写成功", AicNoMosaic.DebugConfig.TryWrite(testFile, entries));
+                byte[] updated2 = File.ReadAllBytes(testFile);
+                bool idem = updated.Length == updated2.Length;
+                if (idem)
+                    for (int i = 0; i < updated.Length; i++)
+                        if (updated[i] != updated2[i]) { idem = false; break; }
+                Expect("W4 幂等后字节不变", idem);
+
+                // 6) 部分更新：只把 weak 设为 0（当前是 1，必有 1 字节差异），
+                //    其它 5 键 Valid=false 不参与——其余字节必须分毫不动
+                var partial = new AicNoMosaic.DebugConfig.Entry[AicNoMosaic.DebugConfig.KeyCount];
+                partial[3].Valid = true;               // weak
+                partial[3].Value = 0;
+                byte[] beforePartial = File.ReadAllBytes(testFile);
+                Expect("P1 部分写入成功", AicNoMosaic.DebugConfig.TryWrite(testFile, partial));
+                byte[] afterPartial = File.ReadAllBytes(testFile);
+                int pdiff = 0;
+                if (beforePartial.Length == afterPartial.Length)
+                    for (int i = 0; i < beforePartial.Length; i++)
+                        if (beforePartial[i] != afterPartial[i]) pdiff++;
+                Expect("P2 部分写入恰好只改 1 字节", pdiff == 1);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("   [FAIL] DebugConfig 测试异常: " + ex.Message);
+                failures++;
+            }
+            finally
+            {
+                try { Directory.Delete(work, true); } catch { }
+            }
+            return failures;
         }
 
         // ==================================================================
