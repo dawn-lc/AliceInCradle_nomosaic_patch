@@ -7,18 +7,18 @@ namespace AicNoMosaic
 {
     /// <summary>
     /// 读写游戏自带的 _debug.txt 调试开关。
-    /// 功能与上游 C++ debug_config.h 等价：只改目标键的数值字符，
-    /// 注释、空行、缩进、未知键所在行全部逐字节原样保留。
     ///
-    /// 实现为纯 C# 字符串处理（无正则、无 unsafe）：
-    /// 文件按 Latin-1 解码 —— 单字节 0..255 与 char 1:1 对应，解码/编码无损，
-    /// 任何字节序列（含 UTF-8 中文注释、任意二进制尾巴）都能原样 round-trip。
-    /// 键定位规则（与上游一致）：
-    ///   * 逐行扫描；行 = 键名 + 空白 + 数值（可负号）+（可选）行内 // 注释；
-    ///   * 忽略空行与以 // 开头的整行注释；
-    ///   * 键名必须整词匹配（右侧是空白或行尾），避免 mighty2 误命中 mighty；
-    ///   * 数值必须干净（后面只能跟空白或 //），否则该行视为无值；
-    ///   * 键值只能是一位数字 0..9 时才会被改写（同长替换，不移动字节）。
+    /// 文件格式约定（实测 ver0.22f+ 均如此）：
+    ///   * UTF-8 无 BOM
+    ///   * Unix LF 换行
+    ///   * 行 = 键名 + 空白 + 数值 +（可选）行内或下方 // 注释
+    ///
+    /// 行为（游戏解析器只读 "键 数值" 行首 token，其余文本纯属给人看的文档）：
+    ///   * 读：逐行整词匹配键名取数值；未知键（nosnd/_player/benchmark…）忽略；
+    ///     注释下一行形式（"mighty 0\n// Enter 1 to..."）不影响读取；
+    ///   * 写：按整行重建目标键 —— 改写为规范行 "&lt;键名&gt; 0/1"；未知键/注释/空行
+    ///     原样保留在原位置；文件里不存在的键追加到末尾。
+    ///     输出统一 UTF-8 无 BOM + LF；无实际改动时不写文件（保 mtime）。
     /// </summary>
     internal static class DebugConfig
     {
@@ -47,9 +47,7 @@ namespace AicNoMosaic
             public bool Valid;   // false = 文件里没有这个键（不参与写入）
         }
 
-        // Latin-1（ISO-8859-1，codepage 28591）：单字节 0..255 与 char 一一对应，
-        // 解码/编码无损 —— 任意字节序列都能原样 round-trip，这正是"逐字节保留"的关键。
-        private static readonly Encoding Latin1 = Encoding.GetEncoding(28591);
+        private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
         /// <summary>读取六个键的值。文件缺失/占用返回 false；缺个别键也算成功（对应 Valid=false）。</summary>
         public static bool TryRead(string path, Entry[] entries)
@@ -61,92 +59,97 @@ namespace AicNoMosaic
                 entries[i].Valid = false;
             }
 
-            string text;
+            string[] lines;
             try
             {
                 if (!File.Exists(path)) return false;
-                text = File.ReadAllText(path, Latin1);   // Latin-1，字节↔char 1:1
+                lines = File.ReadAllLines(path, Utf8NoBom);   // 同时兼容 LF / CRLF
             }
             catch { return false; }
 
-            for (int i = 0; i < KeyCount; i++)
+            foreach (string line in lines)
             {
-                string value;
-                if (TryFindValue(text, KeyNames[i], out value) && value.Length == 1 && IsDigit(value[0]))
+                string key, value;
+                if (!TryParseEntry(line, out key, out value)) continue;
+
+                int index = IndexOfKey(key);
+                if (index < 0) continue;                       // 未知键 → 忽略
+
+                int parsed;
+                if (int.TryParse(value, out parsed))
                 {
-                    entries[i].Value = value[0] - '0';
-                    entries[i].Valid = true;
+                    entries[index].Value = parsed;
+                    entries[index].Valid = true;
                 }
             }
             return true;
         }
 
         /// <summary>
-        /// 写六个键的值（只覆盖原有的单个数字字符；缺失键/多位数/负数/非数字值都跳过）。
-        /// 没有任何实际改动时不写文件，保持 mtime 不变。
+        /// 写六个键的值。采用"重建行"策略：
+        ///   * 目标键（Valid=true）改写为规范行 "&lt;键名&gt; 0/1"（原来的行内文档/对齐注释由游戏文档说明，可省）；
+        ///   * 未知键/空行/注释行原样保留在原位置（文本按 UTF-8 解码为字符串，再以 UTF-8 写回，非 ASCII 注释无损）；
+        ///   * 文件里本来没有的 Valid 键追加到末尾。
+        /// 输出统一 UTF-8 无 BOM + LF；无实际改动时不写文件（保 mtime）。
         /// </summary>
         public static bool TryWrite(string path, Entry[] entries)
         {
             if (entries == null || entries.Length != KeyCount) return false;
 
-            string text;
+            // 是否有任何要写的键：没有则不产生 IO（保 mtime）
+            bool any = false;
+            for (int i = 0; i < KeyCount; i++)
+                if (entries[i].Valid) { any = true; break; }
+            if (!any) return true;
+
+            string[] lines;
             try
             {
                 if (!File.Exists(path)) return false;
-                text = File.ReadAllText(path, Latin1);
+                lines = File.ReadAllLines(path, Utf8NoBom);
             }
             catch { return false; }
 
-            // 收集全部 (值偏移 → 新字符) 改写点，之后按偏移一次拼装，避免边改边找
-            var edits = new List<KeyValuePair<int, char>>(KeyCount);
-            int wanted = 0;
+            var result = new List<string>(lines.Length + KeyCount);
+            var handled = new bool[KeyCount];
+            bool changed = false;
 
-            for (int k = 0; k < KeyCount; k++)
+            foreach (string original in lines)
             {
-                if (!entries[k].Valid) continue;
-                wanted++;
-
-                int value = entries[k].Value;
-                if (value < 0) value = 0;
-                if (value > 9) continue;                       // 只支持一位数字（本文件的值都是 0/1）
-
-                int start;
-                if (!TryFindValueStart(text, KeyNames[k], out start)) continue;
-
-                string current = ReadNumericToken(text, start);
-                if (current.Length != 1 || !IsDigit(current[0])) continue;   // 负数/多位 → 同长替换不成立
-
-                char newValue = (char)('0' + value);
-                if (text[start] == newValue) continue;         // 已是目标值
-
-                edits.Add(new KeyValuePair<int, char>(start, newValue));
+                // 解析这一行：目标键 → 重建；其它（未知键/注释/空行）原样
+                string key, valueToken;
+                int index;
+                if (TryParseEntry(original, out key, out valueToken)
+                    && (index = IndexOfKey(key)) >= 0
+                    && entries[index].Valid)
+                {
+                    string rewritten = KeyNames[index] + " " + (entries[index].Value != 0 ? "1" : "0");
+                    if (rewritten != original.TrimEnd('\r')) changed = true;
+                    result.Add(rewritten);
+                    handled[index] = true;
+                }
+                else
+                {
+                    result.Add(original.TrimEnd('\r'));        // 去 CR：统一 LF 输出
+                }
             }
 
-            if (edits.Count == 0)
+            for (int i = 0; i < KeyCount; i++)
             {
-                // 两种情况都算成功：
-                //   * 所有目标键已是期望值（无差异 → 免写，保 mtime）
-                //   * 调用方没有任何键要写（全 Valid=false）
-                // 只有"有键要改但一个都没改成"（键缺失/值不可同长替换）才失败。
-                return true;
+                if (entries[i].Valid && !handled[i])
+                {
+                    result.Add(KeyNames[i] + " " + (entries[i].Value != 0 ? "1" : "0"));
+                    changed = true;
+                }
             }
 
-            // 按偏移升序（编辑天然按 k 升序且各键偏移互异）拼装新文本
-            var sb = new StringBuilder(text.Length);
-            int copied = 0;
-            foreach (var edit in edits)
-            {
-                if (edit.Key > copied) sb.Append(text, copied, edit.Key - copied);
-                sb.Append(edit.Value);
-                copied = edit.Key + 1;                         // 跳过原数字字符
-            }
-            if (copied < text.Length) sb.Append(text, copied, text.Length - copied);
+            if (!changed) return true;                          // 无差异 → 免写，保 mtime
 
-            // 原子写回：同目录临时文件 + File.Replace
+            // 原子写回：同目录临时文件 + File.Replace；\n 显式拼接保证 LF
             string tmp = path + ".tmp_aic_dbg";
             try
             {
-                File.WriteAllText(tmp, sb.ToString(), Latin1);
+                File.WriteAllText(tmp, string.Join("\n", result) + "\n", Utf8NoBom);
                 if (File.Exists(path)) File.Replace(tmp, path, null, true);
                 else File.Move(tmp, path);
                 return true;
@@ -159,128 +162,52 @@ namespace AicNoMosaic
         }
 
         // ==================================================================
-        //  行扫描核心（纯字符串处理，无正则）
+        //  行解析（纯字符串处理，无正则）
         // ==================================================================
 
-        /// <summary>找到 key 对应数值的首字符偏移；找不到返回 false。</summary>
-        private static bool TryFindValueStart(string text, string key, out int valueStart)
+        /// <summary>
+        /// 尝试把一行解析成 (键名, 数值Token)。
+        /// 规则：去首尾空白 → 空行/以 "//" 开头的行为 false → 第一个 token 是键名，
+        /// 第二个 token 是数值；没有第二个 token（纯键名行）为 false。
+        /// 行内注释从 "//" 起，已在 token 切分时自然剥离。
+        /// </summary>
+        private static bool TryParseEntry(string line, out string key, out string value)
         {
-            valueStart = -1;
-            if (string.IsNullOrEmpty(key)) return false;
-
-            int n = text.Length;
-            int lineStart = 0;
-
-            while (lineStart <= n)
-            {
-                // 行范围：[lineStart, contentEnd)（不含 \r\n）
-                int newline = lineStart >= n ? -1 : text.IndexOf('\n', lineStart);
-                int contentEnd = newline < 0 ? n : newline;
-                if (contentEnd > lineStart && text[contentEnd - 1] == '\r') contentEnd--;
-
-                int p = SkipSpaces(text, lineStart, contentEnd);
-
-                // 空行 / 整行注释：跳过
-                if (p >= contentEnd || IsLineComment(text, p, contentEnd))
-                {
-                    if (AdvanceLine(lineStart, newline, n, out lineStart)) return false;
-                    continue;
-                }
-
-                // 键名整词匹配 + 数值定位
-                if (MatchesKey(text, p, contentEnd, key))
-                {
-                    int q = SkipSpaces(text, p + key.Length, contentEnd);
-
-                    // "mighty   "（只有键名没有值）→ 该行视为无值
-                    // 数值：[q] 可为负号，其后须有数字；数字后须紧跟 空白/行尾/行内注释
-                    int value = q;
-                    int afterNeg = text[q] == '-' ? q + 1 : q;
-                    if (afterNeg < contentEnd && IsDigit(text[afterNeg]))
-                    {
-                        int afterNumber = afterNeg;
-                        while (afterNumber < contentEnd && IsDigit(text[afterNumber])) afterNumber++;
-
-                        bool clean = afterNumber >= contentEnd
-                            || IsSpace(text[afterNumber])
-                            || IsLineComment(text, afterNumber, contentEnd);
-
-                        if (clean)
-                        {
-                            valueStart = value;
-                            return true;
-                        }
-                        // 0x1F 之类 → 非纯值，继续扫后续行
-                    }
-                    // 缺值/坏值 → 继续扫后续行（文件里同键可能只出现一次，此规则与上游一致）
-                }
-
-                if (AdvanceLine(lineStart, newline, n, out lineStart)) return false;
-            }
-            return false;
-        }
-
-        /// <summary>查找 key 的第一个干净数值 token；找不到 value 为 null 且返回 false。</summary>
-        private static bool TryFindValue(string text, string key, out string value)
-        {
+            key = null;
             value = null;
-            int start;
-            if (!TryFindValueStart(text, key, out start)) return false;
-            value = ReadNumericToken(text, start);
-            return true;
+
+            if (line == null) return false;
+            string trimmed = line.Trim();
+            if (trimmed.Length == 0 || trimmed.StartsWith("//", StringComparison.Ordinal)) return false;
+
+            int comment = trimmed.IndexOf("//", StringComparison.Ordinal);
+            if (comment >= 0) trimmed = trimmed.Substring(0, comment).Trim();
+            if (trimmed.Length == 0) return false;
+
+            int firstSpace = IndexOfSpace(trimmed);
+            if (firstSpace < 0) return false;                  // 只有键名没有值
+
+            key = trimmed.Substring(0, firstSpace);
+            value = trimmed.Substring(firstSpace + 1).Trim();
+            return value.Length > 0;
         }
 
-        /// <summary>从 valueStart 读取连续数值 token（含首位负号）。</summary>
-        private static string ReadNumericToken(string text, int start)
+        private static int IndexOfSpace(string s)
         {
-            int end = text[start] == '-' ? start + 1 : start;
-            while (end < text.Length && IsDigit(text[end])) end++;
-            return text.Substring(start, end - start);
-        }
-
-        /// <summary>p 处是否为 "//"。</summary>
-        private static bool IsLineComment(string text, int p, int contentEnd)
-        {
-            return p + 1 < contentEnd && text[p] == '/' && text[p + 1] == '/';
-        }
-
-        /// <summary>text[p..contentEnd) 是否以 key 开头，且 key 右侧是空白或行尾（整词匹配）。</summary>
-        private static bool MatchesKey(string text, int p, int contentEnd, string key)
-        {
-            int keyLen = key.Length;
-            if (contentEnd - p < keyLen) return false;
-            for (int i = 0; i < keyLen; i++)
+            for (int i = 0; i < s.Length; i++)
             {
-                if (text[p + i] != key[i]) return false;
+                char c = s[i];
+                if (c == ' ' || c == '\t') return i;
             }
-            int after = p + keyLen;
-            return after >= contentEnd || IsSpace(text[after]);
+            return -1;
         }
 
-        /// <summary>推进到下一行；已无后续行返回 true（调用方 return）。</summary>
-        private static bool AdvanceLine(int lineStart, int newline, int total, out int next)
+        private static int IndexOfKey(string key)
         {
-            if (newline < 0 || newline >= total)
-            {
-                next = total;
-                return true;    // 最后一行已处理
-            }
-            next = newline + 1;
-            return false;
+            for (int i = 0; i < KeyNames.Length; i++)
+                if (string.Equals(KeyNames[i], key, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            return -1;
         }
-
-        /// <summary>跳过空白并返回首个非空白位置（可能等于 end）。</summary>
-        private static int SkipSpaces(string text, int start, int end)
-        {
-            while (start < end && IsSpace(text[start])) start++;
-            return start;
-        }
-
-        private static bool IsSpace(char c)
-        {
-            return c == ' ' || c == '\t' || c == '\v' || c == '\f' || c == '\r';
-        }
-
-        private static bool IsDigit(char c) { return c >= '0' && c <= '9'; }
     }
 }

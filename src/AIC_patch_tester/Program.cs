@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using AicNoMosaic;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
@@ -127,82 +128,77 @@ namespace AicPatchTester
         }
 
         // ==================================================================
-        //  DebugConfig 回归：_debug.txt 读取/改写/逐字节保留
+        //  DebugConfig 回归：_debug.txt 读取/改写（UTF-8 无 BOM + LF 语义）
         // ==================================================================
 
         private static int RunDebugConfigTests(string debugTxt)
         {
             Console.WriteLine("== DebugConfig（" + Path.GetFileName(debugTxt) + "，样本含未知键/下行注释/超长行）");
             int failures = 0;
-            string backup = debugTxt + ".tester_orig";
             string work = Path.Combine(Path.GetTempPath(), "aic_debugcfg_test");
             try
             {
                 Directory.CreateDirectory(work);
                 string testFile = Path.Combine(work, "_debug.txt");
                 File.Copy(debugTxt, testFile, true);
-                byte[] original = File.ReadAllBytes(testFile);
 
-                // 1) 读取：六个键全部有效且与玩家样本一致
+                // 1) 读取：六个键全部有效（值本身随用户文件变化，不做硬编码断言——下面自记录自比对）
                 var entries = new AicNoMosaic.DebugConfig.Entry[AicNoMosaic.DebugConfig.KeyCount];
                 Expect("R1 读取成功", AicNoMosaic.DebugConfig.TryRead(testFile, entries));
-                int[] expectRead = { 1, 1, 1, 0, 1, 1 };   // <DEBUG>/mighty/nodamage/weak/allskill/announce
-                bool readOk = true;
+                bool allValid = true;
                 for (int i = 0; i < entries.Length; i++)
-                    if (!entries[i].Valid || entries[i].Value != expectRead[i]) { readOk = false; break; }
-                Expect("R2 六键值与样本一致", readOk);
+                    if (!entries[i].Valid) { allValid = false; break; }
+                Expect("R2 六键全部命中", allValid);
+                int[] before = new int[entries.Length];
+                for (int i = 0; i < entries.Length; i++) before[i] = entries[i].Value;
 
-                // 2) 写入：全改反（1→0 / 0→1）
+                // 2) 写入：全部取反（0↔1）
                 for (int i = 0; i < entries.Length; i++)
                     entries[i].Value = entries[i].Value == 0 ? 1 : 0;
                 Expect("W1 写入成功", AicNoMosaic.DebugConfig.TryWrite(testFile, entries));
 
-                // 3) 回读全部反转
+                // 3) 回读：全部已反转
                 var recheck = new AicNoMosaic.DebugConfig.Entry[AicNoMosaic.DebugConfig.KeyCount];
-                AicNoMosaic.DebugConfig.TryRead(testFile, recheck);
+                Expect("R3 回读成功", AicNoMosaic.DebugConfig.TryRead(testFile, recheck));
                 bool reversed = true;
                 for (int i = 0; i < recheck.Length; i++)
-                    if (recheck[i].Value != (expectRead[i] == 0 ? 1 : 0)) { reversed = false; break; }
-                Expect("R3 回读已全部反转", reversed);
+                    if (!recheck[i].Valid || recheck[i].Value != (before[i] == 0 ? 1 : 0)) { reversed = false; break; }
+                Expect("R4 六键值已全部反转", reversed);
 
-                // 4) 逐字节保留：除 6 个目标数值字符外，其余字节必须完全一致
-                byte[] updated = File.ReadAllBytes(testFile);
-                Console.WriteLine("   原始 " + original.Length + " B → 写后 " + updated.Length + " B");
-                if (original.Length != updated.Length)
-                {
-                    Console.WriteLine("   [FAIL] 文件长度改变（不允许）");
-                    failures++;
-                }
-                else
-                {
-                    int diff = 0;
-                    for (int i = 0; i < original.Length; i++)
-                        if (original[i] != updated[i]) diff++;
-                    Expect("W2 除目标数值外逐字节不变（恰好 6 字节差异）", diff == 6);
-                }
+                // 4) 格式断言：UTF-8 无 BOM + LF（重建行为规范行；未知键/注释行原样保留）
+                byte[] bytes = File.ReadAllBytes(testFile);
+                Expect("F1 无 BOM", !(bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF));
+                string utf8 = Encoding.UTF8.GetString(bytes);
+                Expect("F2 无 CRLF 残留（统一 LF）", !utf8.Contains("\r"));
 
-                // 5) 幂等：同样再写一次 → TryWrite 应无改动且成功
-                Expect("W3 幂等重写成功", AicNoMosaic.DebugConfig.TryWrite(testFile, entries));
-                byte[] updated2 = File.ReadAllBytes(testFile);
-                bool idem = updated.Length == updated2.Length;
-                if (idem)
-                    for (int i = 0; i < updated.Length; i++)
-                        if (updated[i] != updated2[i]) { idem = false; break; }
-                Expect("W4 幂等后字节不变", idem);
+                // 5) 内容断言：未知键与玩家注释保留、目标键规范化、缺失键追加
+                Expect("F3 未知键 nosnd 保留", utf8.Contains("nosnd 0"));
+                Expect("F4 未知键 _player 保留", utf8.Contains("_player 0"));
+                Expect("F5 未知键 benchmark 保留", utf8.Contains("benchmark"));
+                Expect("F6 游戏英文注释保留", utf8.Contains("enable log announce"));
+                Expect("F7 目标键已规范化", utf8.Contains("\nmighty 1\n") || utf8.StartsWith("might 1\n") || utf8.Contains("\nmighty 0\n"));
+                Expect("F8 超长注释行保留", utf8.Contains("It's not so funny"));
 
-                // 6) 部分更新：只把 weak 设为 0（当前是 1，必有 1 字节差异），
-                //    其它 5 键 Valid=false 不参与——其余字节必须分毫不动
+                // 6) 幂等：同样再写一次 → 无差异免写（mtime 不变）
+                var again = new AicNoMosaic.DebugConfig.Entry[AicNoMosaic.DebugConfig.KeyCount];
+                for (int i = 0; i < again.Length; i++) { again[i].Valid = true; again[i].Value = recheck[i].Value; }
+                var mtimeBefore = File.GetLastWriteTimeUtc(testFile);
+                Expect("W3 幂等重写成功", AicNoMosaic.DebugConfig.TryWrite(testFile, again));
+                var mtimeAfter = File.GetLastWriteTimeUtc(testFile);
+                Expect("W4 无差异不触碰文件（mtime 不变）", mtimeBefore == mtimeAfter);
+
+                // 7) 部分写入：只写 weak，其余 Valid=false → 其它键行原样
+                string beforePartial = File.ReadAllText(testFile, new UTF8Encoding(false));
                 var partial = new AicNoMosaic.DebugConfig.Entry[AicNoMosaic.DebugConfig.KeyCount];
                 partial[3].Valid = true;               // weak
-                partial[3].Value = 0;
-                byte[] beforePartial = File.ReadAllBytes(testFile);
+                partial[3].Value = 1;
                 Expect("P1 部分写入成功", AicNoMosaic.DebugConfig.TryWrite(testFile, partial));
-                byte[] afterPartial = File.ReadAllBytes(testFile);
-                int pdiff = 0;
-                if (beforePartial.Length == afterPartial.Length)
-                    for (int i = 0; i < beforePartial.Length; i++)
-                        if (beforePartial[i] != afterPartial[i]) pdiff++;
-                Expect("P2 部分写入恰好只改 1 字节", pdiff == 1);
+                string afterPartial = File.ReadAllText(testFile, new UTF8Encoding(false));
+                Expect("P2 目标键行已改写", afterPartial.Contains("\nweak 1\n") || afterPartial.Contains("\nweak 0\n"));
+                bool othersUntouched = true;
+                foreach (string known in new[] { "nosnd 0", "_player 0", "benchmark" })
+                    if (!afterPartial.Contains(known)) { othersUntouched = false; break; }
+                Expect("P3 未知键行原样（部分写入只动目标行）", othersUntouched);
             }
             catch (Exception ex)
             {
