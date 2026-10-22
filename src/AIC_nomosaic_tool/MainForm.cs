@@ -345,29 +345,91 @@ namespace AicNoMosaic
 
         // ----------------------------- 安装/卸载 -----------------------------
 
+        /// <summary>补丁执行结果（工作函数纯返回值，UI 层据此弹窗/更新状态栏）。</summary>
+        private enum PatchOutcome
+        {
+            Succeeded,           // dnlib 修改 + 自校验通过 + 已原子替换
+            RestoredFromBackup,  // 从 .bak 直接还原
+            AlreadyApplied,      // 已是目标状态
+            NotFound,            // 未找到补丁位置
+            VerifyOrIoFailed,    // 内部校验/IO 失败
+            BlockedInUse,        // 游戏文件被占用
+            NoGameRoot,          // 未选择游戏目录
+        }
+
         private void InstallPatch()
         {
-            RunPatching(() => InstallOrUninstallCore(restoreBackup: false, install: true), "安装");
+            RunPatchingAsync(restoreBackup: false, install: true, verb: "安装");
         }
 
         private void UninstallPatch()
         {
-            RunPatching(() => InstallOrUninstallCore(restoreBackup: true, install: false), "卸载");
+            RunPatchingAsync(restoreBackup: true, install: false, verb: "卸载");
         }
 
-        private void RunPatching(Action core, string verb)
+        /// <summary>
+        /// 补丁执行（async）：dnlib 加载/改 IL/写盘的 5~10 秒放在线程池上执行，
+        /// UI 线程保持响应（窗口可拖动/重绘；上游"窗口卡顿属正常现象"的根源
+        /// 就是这段同步跑在 UI 线程上）。UI 副作用（弹窗/状态栏）全部留在
+        /// await 之后的主线程，工作函数 PerformPatchWork 纯计算/IO 无弹窗。
+        /// </summary>
+        private async void RunPatchingAsync(bool restoreBackup, bool install, string verb)
         {
             SetButtonsEnabled(false);
-            _statusLabel.Text = "正在" + verb + "…（约 5~10 秒）";
+            _statusLabel.Text = "正在" + verb + "…（约 5~10 秒，窗口可自由拖动）";
             Cursor = Cursors.WaitCursor;
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                core();
-                // 成功路径：core() 里的 MessageBox 被用户确认后返回，在此收尾状态栏
-                //（修复：此前"正在安装…"在成功后永久残留）
-                _statusLabel.Text = verb + "完成，耗时 "
-                    + stopwatch.Elapsed.TotalSeconds.ToString("0.0") + " 秒";
+                PatchOutcome outcome = await Task.Run(() => PerformPatchWork(restoreBackup, install));
+                stopwatch.Stop();
+                string elapsed = verb + "完成，耗时 " + stopwatch.Elapsed.TotalSeconds.ToString("0.0") + " 秒";
+
+                switch (outcome)
+                {
+                    case PatchOutcome.Succeeded:
+                        MessageBox.Show(this, install ? "安装补丁成功！" : "卸载补丁成功！",
+                            "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        _statusLabel.Text = elapsed;
+                        break;
+
+                    case PatchOutcome.RestoredFromBackup:
+                        MessageBox.Show(this, "已从备份还原原始游戏文件！",
+                            "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        _statusLabel.Text = elapsed;
+                        break;
+
+                    case PatchOutcome.AlreadyApplied:
+                        MessageBox.Show(this, install ? "补丁已安装，请勿重复安装！" : "未找到已安装的补丁！",
+                            "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        _statusLabel.Text = verb + "中止（已是目标状态）";
+                        break;
+
+                    case PatchOutcome.NotFound:
+                        MessageBox.Show(this, "游戏文件异常！找不到补丁安装位置。\n" +
+                            "这可能不是对应的游戏本体，或版本结构已变化。",
+                            "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        _statusLabel.Text = verb + "失败（未找到补丁位置）";
+                        break;
+
+                    case PatchOutcome.VerifyOrIoFailed:
+                        MessageBox.Show(this, "补丁生成失败\n错误信息：内部校验未通过，请重新安装。",
+                            "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        _statusLabel.Text = verb + "失败（校验未通过）";
+                        break;
+
+                    case PatchOutcome.BlockedInUse:
+                        MessageBox.Show(this, "游戏文件被占用，请先关闭游戏。",
+                            "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        _statusLabel.Text = verb + "中止（游戏文件被占用）";
+                        break;
+
+                    case PatchOutcome.NoGameRoot:
+                        MessageBox.Show(this, "请先选择游戏目录。",
+                            "错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        _statusLabel.Text = "";
+                        break;
+                }
             }
             catch (UnauthorizedAccessException)
             {
@@ -382,7 +444,8 @@ namespace AicNoMosaic
             }
             catch (Exception ex)
             {
-                MessageBox.Show(verb + "补丁失败\n错误信息：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, verb + "补丁失败\n错误信息：" + ex.Message,
+                    "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 _statusLabel.Text = verb + "失败";
             }
             finally
@@ -393,24 +456,20 @@ namespace AicNoMosaic
             }
         }
 
-        private void InstallOrUninstallCore(bool restoreBackup, bool install)
+        /// <summary>
+        /// 补丁工作（纯 IO/dnlib，无 UI 副作用；在线程池上执行）。
+        /// 注意 install 语义：true=「安装去码」→ 马赛克禁用（mosaicEnabled=false）；卸载反之。
+        /// </summary>
+        private PatchOutcome PerformPatchWork(bool restoreBackup, bool install)
         {
-            if (!GameFiles.IsGameRoot(_gameRoot))
-            {
-                MessageBox.Show("请先选择游戏目录。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
+            if (!GameFiles.IsGameRoot(_gameRoot)) return PatchOutcome.NoGameRoot;
 
             string dll = GameFiles.AssemblyPath(_gameRoot);
             string backup = GameFiles.BackupPath(_gameRoot);
             string temp = dll + ".tmp_aic";
             TryDeleteFile(temp);
 
-            if (GameFiles.IsFileInUse(dll))
-            {
-                MessageBox.Show("游戏文件被占用，请先关闭游戏。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
+            if (GameFiles.IsFileInUse(dll)) return PatchOutcome.BlockedInUse;
 
             // ---- 优先走备份还原路径 ----
             if (restoreBackup && File.Exists(backup))
@@ -418,36 +477,23 @@ namespace AicNoMosaic
                 File.Copy(backup, temp, true);
                 ReplaceAtomically(temp, dll);      // temp 被消费
                 TryDeleteFile(backup);
-                MessageBox.Show("已从备份还原原始游戏文件！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                RefreshState();
-                return;
+                return PatchOutcome.RestoredFromBackup;
             }
 
             // ---- dnlib 进程内改 IL，输出到同目录临时文件 ----
-            // 语义匹配：install=true 是「安装去码」→ 马赛克禁用（mosaicEnabled=false）；卸载反之。
-            // 此前直接把 install 传进 mosaicEnabled 导致语义完全反转（0.30i 实测：
-            // 点「安装去码」却报「补丁已安装」）。
             var status = MosaicPatcher.Apply(dll, !install, temp);
-
             switch (status)
             {
                 case MosaicPatcher.PatchStatus.NotFound:
                     TryDeleteFile(temp);
-                    MessageBox.Show("游戏文件异常！找不到补丁安装位置。\n" +
-                        "这可能不是对应的游戏本体，或版本结构已变化。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-
+                    return PatchOutcome.NotFound;
                 case MosaicPatcher.PatchStatus.AlreadyApplied:
                     TryDeleteFile(temp);
-                    MessageBox.Show(install ? "补丁已安装，请勿重复安装！" : "未找到已安装的补丁！",
-                        "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-
+                    return PatchOutcome.AlreadyApplied;
                 case MosaicPatcher.PatchStatus.IoError:
                 case MosaicPatcher.PatchStatus.VerifyFailed:
                     TryDeleteFile(temp);
-                    MessageBox.Show("补丁生成失败\n错误信息：内部校验未通过，请重新安装。", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
+                    return PatchOutcome.VerifyOrIoFailed;
             }
 
             // Success：先备份原始 DLL（幂等，只备份一次），再原子替换。
@@ -459,10 +505,7 @@ namespace AicNoMosaic
             }
 
             ReplaceAtomically(temp, dll);
-
-            MessageBox.Show(install ? "安装补丁成功！" : "卸载补丁成功！",
-                "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            RefreshState();
+            return PatchOutcome.Succeeded;
         }
 
         /// <summary>关键优化 #5：用 File.Replace 做同卷近原子替换，中途断电也不会损坏游戏文件。</summary>
@@ -511,7 +554,8 @@ namespace AicNoMosaic
 
         // ----------------------------- 状态/杂项 -----------------------------
 
-        private void RefreshState()
+        /// <summary>刷新补丁状态与按钮可用性（dnlib 检测在线程池上，await 后回 UI 线程）。</summary>
+        private async void RefreshState()
         {
             if (!GameFiles.IsGameRoot(_gameRoot))
             {
@@ -520,24 +564,27 @@ namespace AicNoMosaic
             }
             _stateLabel.Text = "检测中…";
             string dll = GameFiles.AssemblyPath(_gameRoot);
-            Task<MosaicPatcher.InspectState> task = Task.Run(() =>
+
+            MosaicPatcher.InspectState state;
+            try
             {
-                try { return MosaicPatcher.Inspect(dll); }
-                catch { return MosaicPatcher.InspectState.Error; }
-            });
-            task.ContinueWith(t =>
+                state = await Task.Run(() => MosaicPatcher.Inspect(dll));
+            }
+            catch
             {
-                string text;
-                switch (t.Result)
-                {
-                    case MosaicPatcher.InspectState.MosaicOff: text = "已安装补丁（去码生效）"; break;
-                    case MosaicPatcher.InspectState.MosaicOn: text = "未安装（原始状态）"; break;
-                    case MosaicPatcher.InspectState.NotFound: text = "未知（未找到补丁位置）"; break;
-                    default: text = "未知（读取失败）"; break;
-                }
-                _stateLabel.Text = text;
-                ApplyButtonStates(t.Result);   // 状态和按钮可用性同步
-            }, TaskScheduler.FromCurrentSynchronizationContext());
+                state = MosaicPatcher.InspectState.Error;
+            }
+
+            string text;
+            switch (state)
+            {
+                case MosaicPatcher.InspectState.MosaicOff: text = "已安装补丁（去码生效）"; break;
+                case MosaicPatcher.InspectState.MosaicOn: text = "未安装（原始状态）"; break;
+                case MosaicPatcher.InspectState.NotFound: text = "未知（未找到补丁位置）"; break;
+                default: text = "未知（读取失败）"; break;
+            }
+            _stateLabel.Text = text;
+            ApplyButtonStates(state);   // 状态和按钮可用性同步
         }
 
         private void ShowDebugSettings()
