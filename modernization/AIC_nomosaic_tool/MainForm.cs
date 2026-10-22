@@ -43,9 +43,8 @@ namespace AicNoMosaic
             Font smallFont = new Font("Microsoft YaHei", 8.5F);
 
             Text = "Alice In Cradle 补丁工具 " + AppVersion;
-            ClientSize = new Size(520, 420);
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
+            ClientSize = new Size(540, 438);
+            MinimumSize = new Size(540, 438);
             StartPosition = FormStartPosition.CenterScreen;
             Font = baseFont;
             AllowDrop = true;
@@ -65,65 +64,165 @@ namespace AicNoMosaic
             MainMenuStrip = menu;
             Controls.Add(menu);
 
-            _titleLabel = MakeLabel("Alice In Cradle", bigFont, new Point(170, 30), new Size(300, 40));
-            _titleLabel.ForeColor = Color.Black;
+            /*
+             * 相对定位布局（全 WinForms 内建，无一处像素坐标）：
+             *   TableLayoutPanel  ≈ CSS Grid   （行/列 + AutoSize/百分比尺寸）
+             *   Dock / Anchor     ≈ 对齐与伸展  （随窗口/单元格伸缩）
+             *   Margin / Padding  ≈ 外/内边距   （DPI 变化自动缩放）
+             * 行高全部 AutoSize（内容撑开），DPI、字体缩放、窗口拉伸都自适应；
+             * 以后增删控件只需要在流里加一行，不用重算任何坐标。
+             */
+            var root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                Padding = new Padding(24, 8, 24, 12),
+            };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            Controls.Add(root);
 
-            var subtitle = MakeLabel("全版本通用补丁（C# 重写版）", baseFont, new Point(178, 74), new Size(300, 22));
-            subtitle.ForeColor = Color.DimGray;
+            int rowIndex = 0;
+            void AddRow(Control control)
+            {
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.Controls.Add(control, 0, rowIndex++);
+            }
 
-            // 流程自上而下：① 选目录 → ② 看游戏/补丁信息 → ③ 安装/卸载 → ④ 结果反馈 → 注意事项
-            _chooseButton = MakeButton("① 选择游戏目录（或把游戏 exe 拖进来）", new Point(110, 104), new Size(300, 34));
+            // ── 标题区（Anchor=None → 在 100% 宽单元格里水平居中）──
+            _titleLabel = new Label
+            {
+                Text = "Alice In Cradle",
+                Font = bigFont,
+                ForeColor = Color.Black,
+                AutoSize = true,
+                Anchor = AnchorStyles.None,
+                Margin = new Padding(0, 10, 0, 0),
+            };
+            AddRow(_titleLabel);
 
-            MakeLabel("游戏版本：", baseFont, new Point(60, 154), new Size(92, 20));
-            _versionLabel = MakeLabel("未知", baseFont, new Point(160, 154), new Size(330, 20));
-            MakeLabel("游戏路径：", baseFont, new Point(60, 180), new Size(92, 20));
-            _pathLabel = MakeLabel("", smallFont, new Point(160, 179), new Size(340, 42));
-            _pathLabel.ForeColor = Color.DimGray;
-            MakeLabel("补丁状态：", baseFont, new Point(60, 226), new Size(92, 20));
-            _stateLabel = MakeLabel("未选择游戏目录", baseFont, new Point(160, 226), new Size(330, 20));
+            var subtitle = new Label
+            {
+                Text = "全版本通用补丁（C# 重写版）",
+                ForeColor = Color.DimGray,
+                AutoSize = true,
+                Anchor = AnchorStyles.None,
+                Margin = new Padding(0),
+            };
+            AddRow(subtitle);
 
-            _installButton = MakeButton("② 安装去码补丁", new Point(57, 266), new Size(180, 42));
-            _installButton.Enabled = false;
-            _uninstallButton = MakeButton("③ 卸载去码补丁", new Point(283, 266), new Size(180, 42));
-            _uninstallButton.Enabled = false;
-
-            _statusLabel = MakeLabel("", smallFont, new Point(60, 318), new Size(410, 20));
-            _statusLabel.ForeColor = Color.DimGray;
-
-            var tip = MakeLabel(
-                "安装/卸载均需约 5~10 秒，请勿重复操作\n" +
-                "安装时自动备份原始 DLL（Assembly-CSharp.dll.bak）",
-                smallFont, new Point(60, 346), new Size(420, 44));
-            tip.ForeColor = Color.Firebrick;
-
+            // ── ① 第一步：选游戏目录 ──
+            _chooseButton = new Button
+            {
+                Text = "① 选择游戏目录（或把游戏 exe 拖进来）",
+                AutoSize = true,
+                Anchor = AnchorStyles.None,
+                Margin = new Padding(0, 12, 0, 6),
+            };
             _chooseButton.Click += (s, e) => ChooseGameFolder();
+            AddRow(_chooseButton);
+
+            // ── ② 信息区：嵌套 Grid（标签列固定 96px + 数值列 100%）──
+            _versionLabel = InfoValue("未知", baseFont);
+            _pathLabel = InfoValue("", smallFont);
+            _pathLabel.ForeColor = Color.DimGray;
+            _stateLabel = InfoValue("未选择游戏目录", baseFont);
+
+            var infoGrid = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                AutoSize = true,
+                Margin = new Padding(0),
+            };
+            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            infoGrid.Controls.Add(InfoKey("游戏版本：", baseFont), 0, 0);
+            infoGrid.Controls.Add(_versionLabel, 1, 0);
+            infoGrid.Controls.Add(InfoKey("游戏路径：", baseFont), 0, 1);
+            infoGrid.Controls.Add(_pathLabel, 1, 1);
+            infoGrid.Controls.Add(InfoKey("补丁状态：", baseFont), 0, 2);
+            infoGrid.Controls.Add(_stateLabel, 1, 2);
+            AddRow(infoGrid);
+
+            // ── ③ 操作按钮：嵌套 Grid 两列各 50%，按钮 Dock 撑满单元格 ──
+            _installButton = new Button
+            {
+                Text = "② 安装去码补丁",
+                Dock = DockStyle.Fill,
+                Height = 42,
+                Margin = new Padding(0, 8, 8, 0),
+                Enabled = false,
+            };
+            _uninstallButton = new Button
+            {
+                Text = "③ 卸载去码补丁",
+                Dock = DockStyle.Fill,
+                Height = 42,
+                Margin = new Padding(8, 8, 0, 0),
+                Enabled = false,
+            };
+            var buttonGrid = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                AutoSize = true,
+                Margin = new Padding(0),
+            };
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            buttonGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            buttonGrid.Controls.Add(_installButton, 0, 0);
+            buttonGrid.Controls.Add(_uninstallButton, 1, 0);
+            AddRow(buttonGrid);
+
+            // ── ④ 动态状态（安装中/完成/失败），紧贴操作区，随窗宽伸缩 ──
+            _statusLabel = new Label
+            {
+                Text = "",
+                Font = smallFont,
+                ForeColor = Color.DimGray,
+                Dock = DockStyle.Fill,
+                AutoEllipsis = true,
+                Height = 20,
+                Margin = new Padding(0, 10, 0, 0),
+            };
+            AddRow(_statusLabel);
+
+            // ── ⑤ 注意事项（流末尾）──
+            var tip = new Label
+            {
+                Text = "安装/卸载均需约 5~10 秒，请勿重复操作\n" +
+                    "安装时自动备份原始 DLL（Assembly-CSharp.dll.bak）",
+                Font = smallFont,
+                ForeColor = Color.Firebrick,
+                AutoSize = true,
+                Margin = new Padding(0, 6, 0, 0),
+            };
+            AddRow(tip);
         }
 
-        private Label MakeLabel(string text, Font font, Point location, Size size)
+        private static Label InfoKey(string text, Font font)
         {
-            var lb = new Label
+            return new Label
             {
                 Text = text,
                 Font = font,
-                Location = location,
-                Size = size,
-                AutoEllipsis = true,
+                AutoSize = true,
+                Margin = new Padding(0, 7, 0, 2),
             };
-            Controls.Add(lb);
-            return lb;
         }
 
-        private Button MakeButton(string text, Point location, Size size)
+        private static Label InfoValue(string text, Font font)
         {
-            var btn = new Button
+            return new Label
             {
                 Text = text,
-                Location = location,
-                Size = size,
-                Font = Font,
+                Font = font,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true,
+                Margin = new Padding(4, 7, 0, 2),
             };
-            Controls.Add(btn);
-            return btn;
         }
 
         private void InitWiring()

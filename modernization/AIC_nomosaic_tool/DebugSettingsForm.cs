@@ -19,59 +19,93 @@ namespace AicNoMosaic
             _configPath = configPath;
 
             Text = "游戏调试设置";
-            ClientSize = new Size(420, 330);
+            ClientSize = new Size(446, 386);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
             Font = new Font("Microsoft YaHei", 9F);
 
-            MakeLabel("_debug.txt（游戏自带调试开关）", 9.5F, true, new Point(30, 16), new Size(360, 20));
+            // 与主窗口同一套相对布局：TableLayoutPanel（≈CSS Grid），行高 AutoSize
+            var root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                Padding = new Padding(26, 14, 26, 14),
+            };
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            Controls.Add(root);
+
+            int rowIndex = 0;
+            void AddRow(Control control)
+            {
+                root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                root.Controls.Add(control, 0, rowIndex++);
+            }
+
+            AddRow(new Label
+            {
+                Text = "_debug.txt（游戏自带调试开关）",
+                Font = new Font("Microsoft YaHei", 9.5F, FontStyle.Bold),
+                AutoSize = true,
+                Margin = new Padding(0),
+            });
 
             // 每行复选框自带文字（键名+说明），框与文字由同一控件渲染，结构上不可能错位。
-            // 旧实现：独立 Label 渲染 6 行文字 + 复选框按硬编码 21px 行距摆放——
-            // 文字行高由字体/DPI 决定，两者各自为政，行距一错位最后一个复选框就会
-            // 漂到文字末尾的下一行，看起来像"多了一个空选项"（其实它是 announce 的框）。
+            // 旧实现还有一个坑：按硬编码像素*坐标*摆放，DPI 变化必错位——现在随 TLP 流式排列。
             for (int i = 0; i < DebugConfig.KeyCount; i++)
             {
                 var box = new CheckBox
                 {
                     Text = DebugConfig.KeyNames[i] + "    " + DebugConfig.KeyTexts[i],
                     AutoSize = true,
-                    Location = new Point(30, 46 + i * 27),
+                    Margin = new Padding(0, 7, 0, 0),
                     Tag = i,
                 };
-                Controls.Add(box);
+                AddRow(box);
                 _boxes[i] = box;
             }
 
+            // 保存/放弃：嵌套 Grid 两列各 50%，按钮 Dock 撑满
             var saveButton = new Button
             {
                 Text = "保存设置",
-                Location = new Point(60, 230),
-                Size = new Size(130, 32),
+                Dock = DockStyle.Fill,
+                Height = 32,
+                Margin = new Padding(0, 18, 8, 0),
             };
             saveButton.Click += (s, e) => Save();
-            Controls.Add(saveButton);
-
             var cancelButton = new Button
             {
                 Text = "放弃更改",
-                Location = new Point(230, 230),
-                Size = new Size(130, 32),
+                Dock = DockStyle.Fill,
+                Height = 32,
+                Margin = new Padding(8, 18, 0, 0),
             };
             cancelButton.Click += (s, e) => Close();
-            Controls.Add(cancelButton);
 
-            var hint = new Label
+            var buttonGrid = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                AutoSize = true,
+                Margin = new Padding(0),
+            };
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            buttonGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            buttonGrid.Controls.Add(saveButton, 0, 0);
+            buttonGrid.Controls.Add(cancelButton, 1, 0);
+            AddRow(buttonGrid);
+
+            AddRow(new Label
             {
                 Text = "只修改数值本身，注释与其它行原样保留；\n缺失的键会被禁用且不会写入文件。",
-                Location = new Point(60, 272),
-                Size = new Size(320, 40),
                 ForeColor = Color.DimGray,
                 Font = new Font("Microsoft YaHei", 8.5F),
-            };
-            Controls.Add(hint);
+                AutoSize = true,
+                Margin = new Padding(0, 10, 0, 0),
+            });
 
             Load += (s, e) => LoadConfig();
             FormClosing += (s, e) =>
@@ -81,18 +115,6 @@ namespace AicNoMosaic
                     MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK)
                     e.Cancel = true;
             };
-        }
-
-        private void MakeLabel(string text, float size, bool bold, Point location, Size dimensions)
-        {
-            var lb = new Label
-            {
-                Text = text,
-                Font = new Font("Microsoft YaHei", size, bold ? FontStyle.Bold : FontStyle.Regular),
-                Location = location,
-                Size = dimensions,
-            };
-            Controls.Add(lb);
         }
 
         private void LoadConfig()
