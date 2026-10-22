@@ -374,8 +374,7 @@ namespace AicNoMosaic
                 {
                     case MosaicPatcher.InspectState.MosaicOff: text = "已安装补丁（去码生效）"; break;
                     case MosaicPatcher.InspectState.MosaicOn: text = "未安装（原始状态）"; break;
-                    case MosaicPatcher.InspectState.Mixed: text = "状态异常（返回点不一致）"; break;
-                    case MosaicPatcher.InspectState.NotFound: text = "未知（未找到目标方法）"; break;
+                    case MosaicPatcher.InspectState.NotFound: text = "未知（未找到补丁位置）"; break;
                     default: text = "未知（读取失败）"; break;
                 }
                 _stateLabel.Text = text;

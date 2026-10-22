@@ -6,12 +6,15 @@ namespace AicNoMosaic
 {
     /// <summary>
     /// Assembly-CSharp.dll 的去马赛克补丁核心（dnlib 进程内改 IL）。
-    /// 目标方法：MosaicShower.FnDrawMosaic —— 把最终返回 0/1 的 ldc 指令翻转到目标值。
-    /// 修复了上游实现的几处鲁棒性问题：
-    ///   * 遍历全部 ret 补全部位点（原版只看最后一个 ret）；
-    ///   * 校验方法返回类型必须是 System.Boolean，防止未来版本语义漂移后改错方法；
-    ///   * 类型名大小写不敏感，且用 GetTypes() 连嵌套类型一起搜索；
-    ///   * 写出后重新读出自校验。
+    /// 目标方法：MosaicShower.FnDrawMosaic —— 把"是否绘制马赛克"的返回点翻转到目标值。
+    ///
+    /// 返回点定位策略（修 0.30i 实测问题）：
+    ///   0.30i 起方法体内出现多个 ret（提前 return + 最终 return），且值不一致。
+    ///   与上游工具一致，"主返回点"= 最后一个 ret（其前导须为 ldc.i4.0/1）；
+    ///   最后一个 ret 前导不是字面量时，退化为唯一一个 {ldc.i4.0/1, ret} 候选点。
+    ///   —— 不再要求"全部返回点值一致"，早期 return 分支保持游戏原样。
+    /// 其它加固：校验方法返回类型必须是 System.Boolean；大小写不敏感；
+    /// GetTypes() 覆盖嵌套类型；写出后重新读出自校验。
     /// </summary>
     public static class MosaicPatcher
     {
@@ -31,8 +34,7 @@ namespace AicNoMosaic
         {
             MosaicOn,   // 原始状态：绘制马赛克（未安装补丁）
             MosaicOff,  // 已安装补丁：不绘制马赛克
-            Mixed,      // 多个返回点状态不一致（结构异常）
-            NotFound,   // 未找到目标方法
+            NotFound,   // 未找到目标方法/返回点
             Error,      // 读取/解析失败
         }
 
@@ -50,23 +52,34 @@ namespace AicNoMosaic
 
                 using (module)
                 {
-                    bool mosaicOn;
-                    var scan = Scan(module, out mosaicOn);
-                    if (scan == ScanResult.NotFound) return PatchStatus.NotFound;
-                    if (scan == ScanResult.Uniform && mosaicOn == mosaicEnabled) return PatchStatus.AlreadyApplied;
+                    MethodDef method = FindTargetMethod(module);
+                    if (method == null) return PatchStatus.NotFound;
 
-                    Flip(module, mosaicEnabled);
+                    int retIndex;
+                    bool currentValue;
+                    if (!FindPatchPoint(method, out retIndex, out currentValue))
+                        return PatchStatus.NotFound;
+
+                    if (currentValue == mosaicEnabled) return PatchStatus.AlreadyApplied;
+
+                    method.Body.Instructions[retIndex - 1].OpCode =
+                        mosaicEnabled ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0;
+
                     try { module.Write(outputPath); }
                     catch { return PatchStatus.IoError; }
                 }
 
-                // 写出后重新读出，确认已生效
+                // 写出后重新读出，确认主返回点已是目标值
                 try
                 {
                     using (ModuleDefMD check = ModuleDefMD.Load(outputPath))
                     {
-                        bool on;
-                        if (Scan(check, out on) != ScanResult.Uniform || on != mosaicEnabled)
+                        MethodDef checkMethod = FindTargetMethod(check);
+                        int checkIdx;
+                        bool checkValue;
+                        if (checkMethod == null ||
+                            !FindPatchPoint(checkMethod, out checkIdx, out checkValue) ||
+                            checkValue != mosaicEnabled)
                             return PatchStatus.VerifyFailed;
                     }
                 }
@@ -87,13 +100,15 @@ namespace AicNoMosaic
             {
                 using (ModuleDefMD module = ModuleDefMD.Load(dllPath))
                 {
-                    bool on;
-                    switch (Scan(module, out on))
-                    {
-                        case ScanResult.NotFound: return InspectState.NotFound;
-                        case ScanResult.Mixed: return InspectState.Mixed;
-                        default: return on ? InspectState.MosaicOn : InspectState.MosaicOff;
-                    }
+                    MethodDef method = FindTargetMethod(module);
+                    if (method == null) return InspectState.NotFound;
+
+                    int retIndex;
+                    bool currentValue;
+                    if (!FindPatchPoint(method, out retIndex, out currentValue))
+                        return InspectState.NotFound;
+
+                    return currentValue ? InspectState.MosaicOn : InspectState.MosaicOff;
                 }
             }
             catch
@@ -102,84 +117,83 @@ namespace AicNoMosaic
             }
         }
 
-        private enum ScanResult { NotFound, Uniform, Mixed }
+        // ------------------------------------------------------------------
 
         /// <summary>
-        /// 扫描 FnDrawMosaic 的全部 {ldc.i4.0/1, ret} 返回点。
-        /// mosaicOn 输出：全部返回点一致时为该值；NotFound/Mixed 时无意义。
+        /// 按名字找目标方法（大小写不敏感，含嵌套类型）。
+        /// 返回类型必须是 System.Boolean —— 防止未来版本里出现同名方法导致改错位置。
         /// </summary>
-        private static ScanResult Scan(ModuleDefMD module, out bool mosaicOn)
+        private static MethodDef FindTargetMethod(ModuleDefMD module)
         {
-            mosaicOn = false;
-
-            TypeDef type = FindType(module, TypeName);
-            if (type == null) return ScanResult.NotFound;
-
-            MethodDef method = null;
-            foreach (MethodDef m in type.Methods)
+            TypeDef type = null;
+            foreach (TypeDef t in module.GetTypes())
             {
-                if (m.HasBody && string.Equals(m.Name, MethodName, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(t.Name, TypeName, StringComparison.OrdinalIgnoreCase))
                 {
-                    method = m;
+                    type = t;
                     break;
                 }
             }
-            if (method == null) return ScanResult.NotFound;
-
-            // 返回类型校验：目标方法必须返回 bool（防止未来版本里出现同名方法导致改错位置）
-            if (method.ReturnType == null || method.ReturnType.FullName != "System.Boolean")
-                return ScanResult.NotFound;
-
-            var instrs = method.Body.Instructions;
-            bool sawCandidate = false;
-            int on = 0, off = 0;
-            for (int i = 0; i < instrs.Count; i++)
-            {
-                if (instrs[i].OpCode != OpCodes.Ret || i == 0) continue;
-                Instruction prev = instrs[i - 1];
-                if (prev.OpCode != OpCodes.Ldc_I4_0 && prev.OpCode != OpCodes.Ldc_I4_1) continue;
-                sawCandidate = true;
-                if (prev.OpCode == OpCodes.Ldc_I4_1) on++; else off++;
-            }
-
-            if (!sawCandidate) return ScanResult.NotFound;
-            if (on > 0 && off == 0) { mosaicOn = true; return ScanResult.Uniform; }
-            if (off > 0 && on == 0) { mosaicOn = false; return ScanResult.Uniform; }
-            return ScanResult.Mixed;
-        }
-
-        /// <summary>把所有 {ldc.i4.0/1, ret} 返回点翻转到目标值。</summary>
-        private static void Flip(ModuleDefMD module, bool mosaicEnabled)
-        {
-            TypeDef type = FindType(module, TypeName);
-            if (type == null) return;
+            if (type == null) return null;
 
             foreach (MethodDef m in type.Methods)
             {
-                if (!m.HasBody || !string.Equals(m.Name, MethodName, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (m.ReturnType == null || m.ReturnType.FullName != "System.Boolean")
-                    continue;
-
-                var instrs = m.Body.Instructions;
-                OpCode target = mosaicEnabled ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0;
-                for (int i = 0; i < instrs.Count; i++)
-                {
-                    if (instrs[i].OpCode != OpCodes.Ret || i == 0) continue;
-                    Instruction prev = instrs[i - 1];
-                    if (prev.OpCode == OpCodes.Ldc_I4_0 || prev.OpCode == OpCodes.Ldc_I4_1)
-                        prev.OpCode = target;
-                }
+                if (!m.HasBody) continue;
+                if (!string.Equals(m.Name, MethodName, StringComparison.OrdinalIgnoreCase)) continue;
+                if (m.ReturnType == null || m.ReturnType.FullName != "System.Boolean") return null;
+                return m;
             }
+            return null;
         }
 
-        /// <summary>按名字找类型（大小写不敏感，含嵌套类型）。</summary>
-        private static TypeDef FindType(ModuleDefMD module, string name)
+        /// <summary>
+        /// 定位补丁返回点。
+        /// 主策略（与上游一致）：方法体内最后一个 ret，且其前导是 ldc.i4.0/1；
+        /// 退化策略：最后一个 ret 前导不是字面量时，方法体内必须恰有唯一一个
+        /// {ldc.i4.0/1, ret} 候选，取之；否则视为找不到（NotFound）。
+        /// 输出 retIndex = ret 指令位置（补丁点即 retIndex-1），currentValue = 当前值。
+        /// </summary>
+        private static bool FindPatchPoint(MethodDef method, out int retIndex, out bool currentValue)
         {
-            foreach (TypeDef t in module.GetTypes())
-                if (string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase))
-                    return t;
-            return null;
+            retIndex = -1;
+            currentValue = false;
+
+            var instrs = method.Body.Instructions;
+            int n = instrs.Count;
+
+            // 最后一个 ret
+            int lastRet = -1;
+            for (int i = 0; i < n; i++)
+            {
+                if (instrs[i].OpCode == OpCodes.Ret) lastRet = i;
+            }
+            if (lastRet <= 0) return false;
+
+            // 主策略：最后一个 ret 的前导是字面量
+            OpCode lastPrev = instrs[lastRet - 1].OpCode;
+            if (lastPrev == OpCodes.Ldc_I4_0 || lastPrev == OpCodes.Ldc_I4_1)
+            {
+                retIndex = lastRet;
+                currentValue = lastPrev == OpCodes.Ldc_I4_1;
+                return true;
+            }
+
+            // 退化策略：恰有一个 {ldc.i4.0/1, ret} 候选
+            int candidate = -1;
+            int candidateCount = 0;
+            for (int i = 1; i < n; i++)
+            {
+                if (instrs[i].OpCode != OpCodes.Ret) continue;
+                OpCode prev = instrs[i - 1].OpCode;
+                if (prev != OpCodes.Ldc_I4_0 && prev != OpCodes.Ldc_I4_1) continue;
+                candidate = i;
+                candidateCount++;
+            }
+            if (candidateCount != 1) return false;
+
+            retIndex = candidate;
+            currentValue = instrs[candidate - 1].OpCode == OpCodes.Ldc_I4_1;
+            return true;
         }
     }
 }
