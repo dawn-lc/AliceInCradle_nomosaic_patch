@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>AicNoMosaic</RootNamespace>
+    <AssemblyName>AIC_nomosaic_tool</AssemblyName>
+    <Version>2.0.0</Version>
+    <Product>Alice In Cradle 去马赛克补丁工具</Product>
+    <Description>Alice In Cradle 去马赛克补丁工具（C# WinForms 单文件重写版）</Description>
+    <LangVersion>7.3</LangVersion>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <!-- 关键优化 #17：dnlib 以嵌入式资源随主程序发布，运行时从内存加载 -->
+    <!-- 目标 net48 的原因：Win10/11 系统自带 .NET Framework 4.8，玩家双击即用、零运行时安装；
+         若改用 net10.0-windows 则用户必须额外安装 .NET 10 Desktop Runtime，或自包含发布 100MB+。
+         注意：构建 SDK 可以是任意新版 dotnet（含 .NET 10），SDK 版本与目标框架无关 -->
+    <!-- 在 Linux/macOS 上也能构建（ reference assemblies from NuGet ） -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <!-- 编译时引用 + 运行时内存加载 + 随程序发布，三合一 -->
+    <Reference Include="dnlib">
+      <HintPath>third_party\dnlib.dll</HintPath>
+    </Reference>
+    <EmbeddedResource Include="third_party\dnlib.dll" LogicalName="dnlib.dll" />
+    <None Include="third_party\dnlib.LICENSE.txt" />
+  </ItemGroup>
+
+</Project>
