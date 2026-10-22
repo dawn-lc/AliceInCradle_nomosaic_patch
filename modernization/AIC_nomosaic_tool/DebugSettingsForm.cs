@@ -28,25 +28,17 @@ namespace AicNoMosaic
 
             MakeLabel("_debug.txt（游戏自带调试开关）", 9.5F, true, new Point(30, 16), new Size(360, 20));
 
-            var lines = new string[DebugConfig.KeyCount];
-            for (int i = 0; i < DebugConfig.KeyCount; i++)
-                lines[i] = DebugConfig.KeyNames[i] + "        " + DebugConfig.KeyTexts[i];
-
-            var descLabel = new Label
-            {
-                Text = string.Join(Environment.NewLine, lines),
-                Location = new Point(50, 44),
-                Size = new Size(340, 130),
-                Font = new Font("Microsoft YaHei", 9F),
-            };
-            Controls.Add(descLabel);
-
+            // 每行复选框自带文字（键名+说明），框与文字由同一控件渲染，结构上不可能错位。
+            // 旧实现：独立 Label 渲染 6 行文字 + 复选框按硬编码 21px 行距摆放——
+            // 文字行高由字体/DPI 决定，两者各自为政，行距一错位最后一个复选框就会
+            // 漂到文字末尾的下一行，看起来像"多了一个空选项"（其实它是 announce 的框）。
             for (int i = 0; i < DebugConfig.KeyCount; i++)
             {
                 var box = new CheckBox
                 {
-                    Location = new Point(32, 50 + i * 21),
-                    Size = new Size(13, 13),
+                    Text = DebugConfig.KeyNames[i] + "    " + DebugConfig.KeyTexts[i],
+                    AutoSize = true,
+                    Location = new Point(30, 46 + i * 27),
                     Tag = i,
                 };
                 Controls.Add(box);
