@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using AicNoMosaic;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
@@ -183,9 +184,18 @@ namespace AicPatchTester
                 Expect("F2 无 CRLF 残留（统一 LF）", !utf8.Contains("\r"));
 
                 // 5) 内容断言：未知键与玩家注释保留、目标键规范化、缺失键追加
-                Expect("F3 未知键 nosnd 保留", utf8.Contains("nosnd 0"));
-                Expect("F4 未知键 _player 保留", utf8.Contains("_player 0"));
-                Expect("F5 未知键 benchmark 保留", utf8.Contains("benchmark"));
+                // nosnd 自本版起是受管理键，会被重写为规范行 "nosnd 0/1"；
+                // 真正的未知键（supersensitive/nocfg/supercyclone/_player…）应原样保留
+                bool unknownKeysKept =
+                    utf8.Contains("supersensitive 0")
+                    && utf8.Contains("nocfg 0")
+                    && utf8.Contains("supercyclone 0")
+                    && utf8.Contains("_player 0")
+                    && utf8.Contains("benchmark 1")
+                    && utf8.Contains("nocomputeshader 0");
+                Expect("F3 未知键(supersensitive/nocfg/…/_player) 原样保留", unknownKeysKept);
+                Expect("F3b nosnd 已升级为受管理键（规范化行）",
+                    System.Text.RegularExpressions.Regex.IsMatch(utf8, @"\nnosnd [01]\n"));
                 Expect("F6 游戏英文注释保留", utf8.Contains("enable log announce"));
                 Expect("F7 目标键已规范化", utf8.Contains("\nmighty 1\n") || utf8.StartsWith("might 1\n") || utf8.Contains("\nmighty 0\n"));
                 Expect("F8 超长注释行保留", utf8.Contains("It's not so funny"));
@@ -207,7 +217,7 @@ namespace AicPatchTester
                 string afterPartial = File.ReadAllText(testFile, new UTF8Encoding(false));
                 Expect("P2 目标键行已改写", afterPartial.Contains("\nweak 1\n") || afterPartial.Contains("\nweak 0\n"));
                 bool othersUntouched = true;
-                foreach (string known in new[] { "nosnd 0", "_player 0", "benchmark" })
+                foreach (string known in new[] { "supersensitive 0", "nocfg 0", "supercyclone 0", "_player 0", "benchmark" })
                     if (!afterPartial.Contains(known)) { othersUntouched = false; break; }
                 Expect("P3 未知键行原样（部分写入只动目标行）", othersUntouched);
             }

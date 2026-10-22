@@ -83,7 +83,7 @@ namespace AicNoMosaic
                 Dock = DockStyle.Top,
                 AutoSize = true,
                 ColumnCount = 1,
-                Padding = new Padding(22, 8, 22, 12),
+                Padding = new Padding(24, 8, 24, 12),   // 左右对称 —— 列宽由内容定，退让不偏轴
             };
             // 列宽由最宽子控件决定；居中控件用 Anchor=None 在列内居中
             root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -140,7 +140,9 @@ namespace AicNoMosaic
             {
                 ColumnCount = 2,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Margin = new Padding(0),
+                Anchor = AnchorStyles.None,       // ← 无则整块贴列左（截图不居中的主因）
             };
             // 全 Absolute 列：百分比列在无约束测宽下退化；数值列固定宽 + Dock.Fill + AutoEllipsis 效果不变
             infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
@@ -174,7 +176,9 @@ namespace AicNoMosaic
             {
                 ColumnCount = 2,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Margin = new Padding(0),
+                Anchor = AnchorStyles.None,       // 与 infoGrid 同参考系，两块中轴对齐
             };
             buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
             buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));

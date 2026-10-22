@@ -54,15 +54,38 @@ namespace AicNoMosaic
                 Margin = new Padding(0),
             });
 
-            // 每行复选框自带文字（键名+说明），框与文字由同一控件渲染，结构上不可能错位。
-            // 旧实现还有一个坑：按硬编码像素*坐标*摆放，DPI 变化必错位——现在随 TLP 流式排列。
+            // 分两组渲染：作弊开关 / 进阶（排障/功能）开关；每行复选框自带文字
+            //（框与文字同一控件渲染，结构上不可能错位）
             for (int i = 0; i < DebugConfig.KeyCount; i++)
             {
+                if (i == DebugConfig.CheatGroupCount)
+                {
+                    AddRow(new Label
+                    {
+                        Text = "── 进阶（排障 / 功能开关）──",
+                        ForeColor = Color.DimGray,
+                        Font = new Font("Microsoft YaHei", 8.5F, FontStyle.Bold),
+                        AutoSize = true,
+                        Margin = new Padding(0, 10, 0, 0),
+                    });
+                }
+                else if (i == 1)
+                {
+                    AddRow(new Label
+                    {
+                        Text = "── 作弊开关 ──",
+                        ForeColor = Color.DimGray,
+                        Font = new Font("Microsoft YaHei", 8.5F, FontStyle.Bold),
+                        AutoSize = true,
+                        Margin = new Padding(0, 2, 0, 0),
+                    });
+                }
+
                 var box = new CheckBox
                 {
                     Text = DebugConfig.KeyNames[i] + "    " + DebugConfig.KeyTexts[i],
                     AutoSize = true,
-                    Margin = new Padding(0, 7, 0, 0),
+                    Margin = new Padding(0, 6, 0, 0),
                     Tag = i,
                 };
                 AddRow(box);
@@ -91,7 +114,9 @@ namespace AicNoMosaic
             {
                 ColumnCount = 2,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Margin = new Padding(0),
+                Anchor = AnchorStyles.None,       // 与主窗同一套参考系，中轴对齐
             };
             buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
             buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));

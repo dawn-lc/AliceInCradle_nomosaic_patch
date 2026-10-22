@@ -22,12 +22,17 @@ namespace AicNoMosaic
     /// </summary>
     internal static class DebugConfig
     {
-        public const int KeyCount = 6;
+        // 工具暴露的键分两组（同一样本 _debug.txt；_player 起为作者警告区，不进 UI，原样保留）
+        public const int KeyCount = 10;
 
-        // 顺序与 UI 复选框一一对应
+        // 组边界：前 CheatGroupCount 个是"作弊开关"，其余是"进阶排障/功能开关"
+        public const int CheatGroupCount = 6;
+
+        // 顺序与 UI 复选框一一对应（0..5 作弊组；6..9 进阶组）
         public static readonly string[] KeyNames =
         {
             "<DEBUG>", "mighty", "nodamage", "weak", "allskill", "announce",
+            "nosnd", "reloadmtr", "timestamp", "albumunlock",
         };
 
         // 各键中文说明（给调试窗口显示）
@@ -39,6 +44,10 @@ namespace AicNoMosaic
             "受到伤害立即晕厥",
             "解锁全部魔法技能",
             "启动游戏时显示报错",
+            "跳过音效资源加载（缩短加载，无事声音）",
+            "允许 F9 热重载本地化文本，启用本地化写入",
+            "导出日志带时间戳；与 announce 同开可用 F7 调试菜单",
+            "战斗中可切换诺艾尔新旧立绘（0.24+）",
         };
 
         public struct Entry
