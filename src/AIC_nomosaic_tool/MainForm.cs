@@ -459,6 +459,8 @@ namespace AicNoMosaic
         /// <summary>
         /// 补丁工作（纯 IO/dnlib，无 UI 副作用；在线程池上执行）。
         /// 注意 install 语义：true=「安装去码」→ 马赛克禁用（mosaicEnabled=false）；卸载反之。
+        /// 附加职责：维持 _sha.txt（游戏防篡改校验清单）与 DLL 实际状态一致 ——
+        /// 更新 Assembly-CSharp 条目为新 SHA256；卸载还原时用 .orig 恢复原始清单。
         /// </summary>
         private PatchOutcome PerformPatchWork(bool restoreBackup, bool install)
         {
@@ -467,6 +469,7 @@ namespace AicNoMosaic
             string dll = GameFiles.AssemblyPath(_gameRoot);
             string backup = GameFiles.BackupPath(_gameRoot);
             string temp = dll + ".tmp_aic";
+            string sha = GameFiles.ShaManifestPath(_gameRoot);
             TryDeleteFile(temp);
 
             if (GameFiles.IsFileInUse(dll)) return PatchOutcome.BlockedInUse;
@@ -477,6 +480,7 @@ namespace AicNoMosaic
                 File.Copy(backup, temp, true);
                 ReplaceAtomically(temp, dll);      // temp 被消费
                 TryDeleteFile(backup);
+                ShaManifest.TryRestoreOriginal(sha);   // 校验清单同参还原（原始哈希表）
                 return PatchOutcome.RestoredFromBackup;
             }
 
@@ -505,6 +509,12 @@ namespace AicNoMosaic
             }
 
             ReplaceAtomically(temp, dll);
+
+            // ---- 维持 _sha.txt 一致性：登记打完补丁后的新 SHA256（非致命，失败不影响补丁） ----
+            string newSha = ShaManifest.ComputeFileSha256(dll);
+            if (newSha != null)
+                ShaManifest.TryUpdateEntry(sha, ShaManifest.ManagedEntry, newSha);
+
             return PatchOutcome.Succeeded;
         }
 

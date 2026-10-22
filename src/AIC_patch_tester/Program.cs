@@ -39,12 +39,20 @@ namespace AicPatchTester
             // —— GameVersion：真实 128B 头部探针 + 全管线合成样本 ——
             failures += RunGameVersionTests(args);
 
-            // —— DebugConfig 回归：对 _debug.txt 验证读取/改写/逐字节保留 ——
+            // —— DebugConfig 回归：对 _debug.txt 验证读取/改写/保序保留 ——
             foreach (string arg in args)
             {
                 string debugTxt = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(arg)) ?? ".", "_debug.txt");
                 if (File.Exists(debugTxt))
                     failures += RunDebugConfigTests(debugTxt);
+            }
+
+            // —— ShaManifest 回归：对 _sha.txt 验证更新/保留/.orig 恢复 ——
+            foreach (string arg in args)
+            {
+                string shaTxt = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(arg)) ?? ".", "_sha.txt");
+                if (File.Exists(shaTxt))
+                    failures += RunShaManifestTests(shaTxt);
             }
 
             foreach (string dll in args)
@@ -456,6 +464,101 @@ namespace AicPatchTester
         }
 
         private static int AlignUpTester(int v, int align) => (v + (align - 1)) & ~(align - 1);
+
+        // ==================================================================
+        //  ShaManifest 回归：_sha.txt 更新/保留/.orig 恢复
+        // ==================================================================
+
+        private static int RunShaManifestTests(string shaTxt)
+        {
+            Console.WriteLine("== ShaManifest（" + Path.GetFileName(shaTxt) + "）");
+            _synthFailures = 0;
+            string work = Path.Combine(Path.GetTempPath(), "aic_shamanifest_test");
+            try
+            {
+                Directory.CreateDirectory(work);
+                string testFile = Path.Combine(work, "_sha.txt");
+                File.Copy(shaTxt, testFile, true);
+                string[] before = File.ReadAllLines(testFile);
+                int beforeLines = before.Length;
+
+                // 断言真实样本格式：路径/哈希交替，Hash 均小写 64 hex。已有 Assembly 条目。
+                var fakeSha = new string('a', 64);
+                bool ok = AicNoMosaic.ShaManifest.TryUpdateEntry(
+                    testFile, AicNoMosaic.ShaManifest.ManagedEntry, fakeSha);
+                Expect("S1 更新已有条目成功", ok);
+
+                string[] after = File.ReadAllLines(testFile);
+                Expect("S2 行数不变", after.Length == beforeLines);
+
+                // 找到 Assembly 条目行，确认哈希已更新、其它条目保留
+                int idx = -1;
+                for (int i = 0; i + 1 < after.Length; i += 2)
+                {
+                    if (string.Equals(after[i].Trim(), AicNoMosaic.ShaManifest.ManagedEntry, StringComparison.OrdinalIgnoreCase))
+                    { idx = i; break; }
+                }
+                Expect("S3 Assembly 条目存在", idx >= 0);
+                if (idx < 0) return _synthFailures;
+                Expect("S4 目标哈希已更新为 fake", after[idx + 1] == fakeSha);
+                bool othersSame = true;
+                for (int i = 0; i < before.Length; i++)
+                {
+                    if (i == idx) continue;                     // Assembly 路径行
+                    if (i == idx + 1) continue;                 // 已更新的哈希行
+                    if (before[i] != after[i]) { othersSame = false; break; }
+                }
+                Expect("S5 其余行原样保留", othersSame);
+
+                // 格式断言
+                byte[] bytes = File.ReadAllBytes(testFile);
+                Expect("S6 无 BOM", !(bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF));
+                string asText = Encoding.UTF8.GetString(bytes);
+                Expect("S7 无 CRLF", !asText.Contains("\r"));
+
+                // S8 真实 SHA256 端到端：让 ShaManifest 计算一个已知文件（改回自身）
+                var tmpDll = Path.Combine(work, "dummy.dll");
+                File.WriteAllBytes(tmpDll, new byte[] { 1, 2, 3, 4, 5 });
+                string real = AicNoMosaic.ShaManifest.ComputeFileSha256(tmpDll);
+                Expect("S8 SHA256 计算可用（64 hex）", real != null && real.Length == 64);
+
+                // S9/S10 .orig 备份与恢复
+                string orig = testFile + ".orig";
+                Expect("S9 .orig 已自动生成", File.Exists(orig));
+                string[] origLines = File.ReadAllLines(orig);
+                int origIdx = -1;
+                for (int i = 0; i + 1 < origLines.Length; i += 2)
+                    if (string.Equals(origLines[i].Trim(), AicNoMosaic.ShaManifest.ManagedEntry, StringComparison.OrdinalIgnoreCase))
+                    { origIdx = i; break; }
+                Expect("S10 .orig 含原始哈希", origIdx >= 0 && origLines[origIdx + 1] != fakeSha);
+
+                Expect("S11 TryRestoreOriginal 成功", AicNoMosaic.ShaManifest.TryRestoreOriginal(testFile));
+                string[] restored = File.ReadAllLines(testFile);
+                bool restoredOk = restored.Length == beforeLines;
+                for (int i = 0; i < restored.Length && restoredOk; i++)
+                    if (restored[i] != before[i]) restoredOk = false;
+                Expect("S12 还原后与原始完全一致", restoredOk);
+                Expect("S13 .orig 已被消耗删除", !File.Exists(orig));
+
+                // S14 缺失条目的追加行为（合成清单）
+                string miniFile = Path.Combine(work, "_mini.txt");
+                File.WriteAllLines(miniFile, new[] { "Managed/other.dll", new string('0', 64) });
+                AicNoMosaic.ShaManifest.TryUpdateEntry(miniFile, AicNoMosaic.ShaManifest.ManagedEntry, fakeSha);
+                string mini = File.ReadAllText(miniFile);
+                Expect("S14 清单无该条目时追加到末尾", mini.Contains("\nManaged/Assembly-CSharp.dll\n"));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("   [FAIL] ShaManifest 测试异常: " + ex.Message);
+                _synthFailures++;
+            }
+            finally
+            {
+                try { Directory.Delete(work, true); } catch { }
+            }
+            Console.WriteLine(_synthFailures == 0 ? "   [OK] ShaManifest 全部通过" : ("   有 " + _synthFailures + " 个失败"));
+            return _synthFailures;
+        }
 
         private static bool BuildSynthetic(string hostDll, string outPath, Action<CilBody> filler)
         {

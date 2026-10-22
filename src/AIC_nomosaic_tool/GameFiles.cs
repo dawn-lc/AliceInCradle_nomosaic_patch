@@ -31,6 +31,12 @@ namespace AicNoMosaic
             return Path.Combine(root, DataFolder, "StreamingAssets", "_debug.txt");
         }
 
+        /// <summary>游戏防篡改校验清单（与 _debug.txt 同目录）。记录 Managed/Assembly-CSharp.dll 等全部文件 SHA256。</summary>
+        public static string ShaManifestPath(string root)
+        {
+            return Path.Combine(root, DataFolder, "StreamingAssets", "_sha.txt");
+        }
+
         public static bool IsGameRoot(string dir)
         {
             if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return false;
