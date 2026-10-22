@@ -22,6 +22,7 @@ namespace AicNoMosaic
         private Label _pathLabel;
         private Label _stateLabel;
         private Label _statusLabel;
+        private Button _chooseButton;
         private Button _installButton;
         private Button _uninstallButton;
         private string _gameRoot = "";
@@ -64,37 +65,38 @@ namespace AicNoMosaic
             MainMenuStrip = menu;
             Controls.Add(menu);
 
-            _titleLabel = MakeLabel("Alice In Cradle", bigFont, new Point(170, 34), new Size(300, 40));
+            _titleLabel = MakeLabel("Alice In Cradle", bigFont, new Point(170, 30), new Size(300, 40));
             _titleLabel.ForeColor = Color.Black;
 
-            var subtitle = MakeLabel("全版本通用补丁（C# 重写版）", baseFont, new Point(178, 78), new Size(300, 24));
+            var subtitle = MakeLabel("全版本通用补丁（C# 重写版）", baseFont, new Point(178, 74), new Size(300, 22));
             subtitle.ForeColor = Color.DimGray;
 
-            MakeLabel("游戏版本：", baseFont, new Point(60, 116), new Size(92, 20));
-            _versionLabel = MakeLabel("未知", baseFont, new Point(160, 116), new Size(330, 20));
-            MakeLabel("游戏路径：", baseFont, new Point(60, 142), new Size(92, 20));
-            _pathLabel = MakeLabel("", smallFont, new Point(160, 141), new Size(340, 44));
-            _pathLabel.ForeColor = Color.DimGray;
-            MakeLabel("补丁状态：", baseFont, new Point(60, 190), new Size(92, 20));
-            _stateLabel = MakeLabel("未选择游戏目录", baseFont, new Point(160, 190), new Size(330, 20));
+            // 流程自上而下：① 选目录 → ② 看游戏/补丁信息 → ③ 安装/卸载 → ④ 结果反馈 → 注意事项
+            _chooseButton = MakeButton("① 选择游戏目录（或把游戏 exe 拖进来）", new Point(110, 104), new Size(300, 34));
 
-            _installButton = MakeButton("安装去码补丁", new Point(57, 240), new Size(180, 42));
+            MakeLabel("游戏版本：", baseFont, new Point(60, 154), new Size(92, 20));
+            _versionLabel = MakeLabel("未知", baseFont, new Point(160, 154), new Size(330, 20));
+            MakeLabel("游戏路径：", baseFont, new Point(60, 180), new Size(92, 20));
+            _pathLabel = MakeLabel("", smallFont, new Point(160, 179), new Size(340, 42));
+            _pathLabel.ForeColor = Color.DimGray;
+            MakeLabel("补丁状态：", baseFont, new Point(60, 226), new Size(92, 20));
+            _stateLabel = MakeLabel("未选择游戏目录", baseFont, new Point(160, 226), new Size(330, 20));
+
+            _installButton = MakeButton("② 安装去码补丁", new Point(57, 266), new Size(180, 42));
             _installButton.Enabled = false;
-            _uninstallButton = MakeButton("卸载去码补丁", new Point(283, 240), new Size(180, 42));
+            _uninstallButton = MakeButton("③ 卸载去码补丁", new Point(283, 266), new Size(180, 42));
             _uninstallButton.Enabled = false;
 
-            var chooseButton = MakeButton("选择游戏目录（或把游戏 exe 拖进来）", new Point(130, 292), new Size(260, 34));
-
-            _statusLabel = MakeLabel("", smallFont, new Point(60, 338), new Size(410, 20));
+            _statusLabel = MakeLabel("", smallFont, new Point(60, 318), new Size(410, 20));
             _statusLabel.ForeColor = Color.DimGray;
 
             var tip = MakeLabel(
                 "安装/卸载均需约 5~10 秒，请勿重复操作\n" +
                 "安装时自动备份原始 DLL（Assembly-CSharp.dll.bak）",
-                smallFont, new Point(60, 366), new Size(420, 44));
+                smallFont, new Point(60, 346), new Size(420, 44));
             tip.ForeColor = Color.Firebrick;
 
-            chooseButton.Click += (s, e) => ChooseGameFolder();
+            _chooseButton.Click += (s, e) => ChooseGameFolder();
         }
 
         private Label MakeLabel(string text, Font font, Point location, Size size)
@@ -362,6 +364,7 @@ namespace AicNoMosaic
         {
             _installButton.Enabled = enabled;
             _uninstallButton.Enabled = enabled;
+            _chooseButton.Enabled = enabled;   // 避免执行中切换游戏目录
         }
 
         // ----------------------------- 状态/杂项 -----------------------------
