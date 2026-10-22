@@ -43,8 +43,12 @@ namespace AicNoMosaic
             Font smallFont = new Font("Microsoft YaHei", 8.5F);
 
             Text = "Alice In Cradle 补丁工具 " + AppVersion;
-            ClientSize = new Size(540, 438);
-            MinimumSize = new Size(540, 438);
+            // 尺寸策略：宽度固定合理值；高度在 Shown（完成布局）后按 root 实际渲染高度收紧。
+            // 不用 Form AutoSize：它在 TLP(AutoSize 列/Dock) 嵌套下首选尺寸测量不可靠，
+            // 实测先后出现高度塌陷（Dock.Fill+百分比列）与宽度塌陷（AutoSize 列）
+            ClientSize = new Size(540, 400);
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
             Font = baseFont;
             AllowDrop = true;
@@ -61,8 +65,7 @@ namespace AicNoMosaic
             menu.Items.Add(fileMenu);
             menu.Items.Add(toolsMenu);
             menu.Items.Add(helpMenu);
-            MainMenuStrip = menu;
-            Controls.Add(menu);
+            MainMenuStrip = menu;   // Controls.Add(menu) 移至 root 之后：后加者先布局、贴顶
 
             /*
              * 相对定位布局（全 WinForms 内建，无一处像素坐标）：
@@ -74,12 +77,17 @@ namespace AicNoMosaic
              */
             var root = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                // Dock=Top + AutoSize=true：行高按内容撑出，root.Height 即真实内容高度
+                //（在 Shown 时读取它来收紧窗体高度；宽度不受 AutoSize 测量影响）
+                Dock = DockStyle.Top,
+                AutoSize = true,
                 ColumnCount = 1,
-                Padding = new Padding(24, 8, 24, 12),
+                Padding = new Padding(22, 8, 22, 12),
             };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            // 列宽由最宽子控件决定；居中控件用 Anchor=None 在列内居中
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             Controls.Add(root);
+            Controls.Add(menu);           // 后加 → 先布局 → 菜单贴顶，root 从菜单下沿开始
 
             int rowIndex = 0;
             void AddRow(Control control)
@@ -129,13 +137,13 @@ namespace AicNoMosaic
 
             var infoGrid = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
                 ColumnCount = 2,
                 AutoSize = true,
                 Margin = new Padding(0),
             };
+            // 全 Absolute 列：百分比列在无约束测宽下退化；数值列固定宽 + Dock.Fill + AutoEllipsis 效果不变
             infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
-            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
             infoGrid.Controls.Add(InfoKey("游戏版本：", baseFont), 0, 0);
             infoGrid.Controls.Add(_versionLabel, 1, 0);
             infoGrid.Controls.Add(InfoKey("游戏路径：", baseFont), 0, 1);
@@ -163,27 +171,28 @@ namespace AicNoMosaic
             };
             var buttonGrid = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
                 ColumnCount = 2,
                 AutoSize = true,
                 Margin = new Padding(0),
             };
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
             buttonGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             buttonGrid.Controls.Add(_installButton, 0, 0);
             buttonGrid.Controls.Add(_uninstallButton, 1, 0);
             AddRow(buttonGrid);
 
             // ── ④ 动态状态（安装中/完成/失败），紧贴操作区，随窗宽伸缩 ──
+            // AutoSize=false 才能让 AutoEllipsis 生效；Dock=Fill 占满 AutoSize 列宽
             _statusLabel = new Label
             {
                 Text = "",
                 Font = smallFont,
                 ForeColor = Color.DimGray,
                 Dock = DockStyle.Fill,
-                AutoEllipsis = true,
+                AutoSize = false,
                 Height = 20,
+                AutoEllipsis = true,
                 Margin = new Padding(0, 10, 0, 0),
             };
             AddRow(_statusLabel);
@@ -199,6 +208,14 @@ namespace AicNoMosaic
                 Margin = new Padding(0, 6, 0, 0),
             };
             AddRow(tip);
+
+            // 高度自适应：Shown 时内容已完成布局，用 root 实际渲染高度收紧客户区
+            //（杜绝对高度导致的底部空白，也比 Form AutoSize 可靠——宽度不参与自测）
+            Shown += (s, e) =>
+            {
+                ClientSize = new Size(540, menu.Height + root.Height);
+                CenterToScreen();
+            };
         }
 
         private static Label InfoKey(string text, Font font)
@@ -369,7 +386,8 @@ namespace AicNoMosaic
             finally
             {
                 Cursor = Cursors.Default;
-                SetButtonsEnabled(true);
+                SetButtonsEnabled(true);   // 先全部恢复，随后 RefreshState 按实际状态校正
+                RefreshState();
             }
         }
 
@@ -466,6 +484,29 @@ namespace AicNoMosaic
             _chooseButton.Enabled = enabled;   // 避免执行中切换游戏目录
         }
 
+        /// <summary>
+        /// 按补丁实际状态启用/禁用对应按钮：已补丁→只能卸载，原版→只能安装，
+        /// 未知→两个都允许尝试。修复：已安装时安装按钮仍然可点（点了必弹"已安装"）。
+        /// </summary>
+        private void ApplyButtonStates(MosaicPatcher.InspectState state)
+        {
+            switch (state)
+            {
+                case MosaicPatcher.InspectState.MosaicOff:    // 已补丁
+                    _installButton.Enabled = false;
+                    _uninstallButton.Enabled = true;
+                    break;
+                case MosaicPatcher.InspectState.MosaicOn:     // 原版
+                    _installButton.Enabled = true;
+                    _uninstallButton.Enabled = false;
+                    break;
+                default:                                      // 未知 → 不预判
+                    _installButton.Enabled = true;
+                    _uninstallButton.Enabled = true;
+                    break;
+            }
+        }
+
         // ----------------------------- 状态/杂项 -----------------------------
 
         private void RefreshState()
@@ -493,6 +534,7 @@ namespace AicNoMosaic
                     default: text = "未知（读取失败）"; break;
                 }
                 _stateLabel.Text = text;
+                ApplyButtonStates(t.Result);   // 状态和按钮可用性同步
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 

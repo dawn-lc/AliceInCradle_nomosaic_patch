@@ -19,21 +19,24 @@ namespace AicNoMosaic
             _configPath = configPath;
 
             Text = "游戏调试设置";
-            ClientSize = new Size(446, 386);
+            // 尺寸策略同主窗：宽度固定、高度在 Shown 后按 root 实际渲染高度收紧
+            ClientSize = new Size(446, 360);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
             Font = new Font("Microsoft YaHei", 9F);
 
-            // 与主窗口同一套相对布局：TableLayoutPanel（≈CSS Grid），行高 AutoSize
+            // 与主窗口同一套相对布局：TableLayoutPanel（≈CSS Grid），行高 AutoSize。
+            // Dock=Top + AutoSize 列而非 Dock.Fill：否则无约束测宽退化、窗体堑陷
             var root = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
+                Dock = DockStyle.Top,
+                AutoSize = true,
                 ColumnCount = 1,
                 Padding = new Padding(26, 14, 26, 14),
             };
-            root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             Controls.Add(root);
 
             int rowIndex = 0;
@@ -86,13 +89,12 @@ namespace AicNoMosaic
 
             var buttonGrid = new TableLayoutPanel
             {
-                Dock = DockStyle.Fill,
                 ColumnCount = 2,
                 AutoSize = true,
                 Margin = new Padding(0),
             };
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
             buttonGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             buttonGrid.Controls.Add(saveButton, 0, 0);
             buttonGrid.Controls.Add(cancelButton, 1, 0);
@@ -106,6 +108,13 @@ namespace AicNoMosaic
                 AutoSize = true,
                 Margin = new Padding(0, 10, 0, 0),
             });
+
+            // 高度自适应：Shown 时按 root 实际渲染高度收紧客户区
+            Shown += (s, e) =>
+            {
+                ClientSize = new Size(446, root.Height);
+                CenterToParent();
+            };
 
             Load += (s, e) => LoadConfig();
             FormClosing += (s, e) =>
