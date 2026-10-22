@@ -24,12 +24,9 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
-    <!-- net48 上 Span<T>/BinaryPrimitives 需要 System.Memory。
-       【教训】不能 ExcludeAssets="runtime"：Windows 实测 FileNotFoundException
-       （System.Memory 4.0.1.2 缺失 —— 框架内化仅覆盖部分机器/场景，binder
-       不凭空解析 netstandard shim）。垫片必须随程序发布，并配合 app.config 的
-       binding redirect 指向包内 4.0.1.1 版本号 -->
-    <PackageReference Include="System.Memory" Version="4.5.5" />
+    <!-- net48 运行时不内化 System.Memory.dll（4.7.1+ 仅内化 Buffers/Vectors/Unsafe 的转发），
+         Span 方案需要垫片随包，实测 ExcludeAssets=runtime 会 FileNotFoundException。
+         GameVersion 现用纯 byte[]+手写端序实现，不再需要 System.Memory → 不引用 -->
   </ItemGroup>
 
   <ItemGroup>
