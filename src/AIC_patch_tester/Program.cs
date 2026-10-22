@@ -145,16 +145,16 @@ namespace AicPatchTester
                     b.Instructions.Add(new Instruction(OpCodes.Ret));
                 }))
                 {
-                    Expect(failures, "A1 剩余 MosaicOn", MosaicPatcher.Inspect(a) == MosaicPatcher.InspectState.MosaicOn);
-                    Expect(failures, "A2 应用 false", MosaicPatcher.Apply(a, false, aOut) == MosaicPatcher.PatchStatus.Success);
+                    Expect("A1 剩余 MosaicOn", MosaicPatcher.Inspect(a) == MosaicPatcher.InspectState.MosaicOn);
+                    Expect("A2 应用 false", MosaicPatcher.Apply(a, false, aOut) == MosaicPatcher.PatchStatus.Success);
                     OpCode[] ops = ReadOpcodes(aOut);
-                    Expect(failures, "A3 只翻主点（早期 return 保留）", ops.Length == 4
+                    Expect("A3 只翻主点（早期 return 保留）", ops.Length == 4
                         && ops[0] == OpCodes.Ldc_I4_0 && ops[1] == OpCodes.Ret
                         && ops[2] == OpCodes.Ldc_I4_0 && ops[3] == OpCodes.Ret);
-                    Expect(failures, "A4 应用后 MosaicOff", MosaicPatcher.Inspect(aOut) == MosaicPatcher.InspectState.MosaicOff);
-                    Expect(failures, "A5 恢复 true", MosaicPatcher.Apply(aOut, true, aOut2) == MosaicPatcher.PatchStatus.Success);
+                    Expect("A4 应用后 MosaicOff", MosaicPatcher.Inspect(aOut) == MosaicPatcher.InspectState.MosaicOff);
+                    Expect("A5 恢复 true", MosaicPatcher.Apply(aOut, true, aOut2) == MosaicPatcher.PatchStatus.Success);
                     OpCode[] ops2 = ReadOpcodes(aOut2);
-                    Expect(failures, "A6 恢复后主点=1、早期点=0", ops2.Length == 4
+                    Expect("A6 恢复后主点=1、早期点=0", ops2.Length == 4
                         && ops2[0] == OpCodes.Ldc_I4_0 && ops2[1] == OpCodes.Ret
                         && ops2[2] == OpCodes.Ldc_I4_1 && ops2[3] == OpCodes.Ret);
                 }
@@ -172,11 +172,11 @@ namespace AicPatchTester
                     bd.Instructions.Add(new Instruction(OpCodes.Ret));
                 }))
                 {
-                    Expect(failures, "B1 退化策略得 MosaicOff", MosaicPatcher.Inspect(b2) == MosaicPatcher.InspectState.MosaicOff);
-                    Expect(failures, "B2 已是 false → AlreadyApplied", MosaicPatcher.Apply(b2, false, bOut) == MosaicPatcher.PatchStatus.AlreadyApplied);
-                    Expect(failures, "B3 翻转 true", MosaicPatcher.Apply(b2, true, bOut) == MosaicPatcher.PatchStatus.Success);
+                    Expect("B1 退化策略得 MosaicOff", MosaicPatcher.Inspect(b2) == MosaicPatcher.InspectState.MosaicOff);
+                    Expect("B2 已是 false → AlreadyApplied", MosaicPatcher.Apply(b2, false, bOut) == MosaicPatcher.PatchStatus.AlreadyApplied);
+                    Expect("B3 翻转 true", MosaicPatcher.Apply(b2, true, bOut) == MosaicPatcher.PatchStatus.Success);
                     OpCode[] ops = ReadOpcodes(bOut);
-                    Expect(failures, "B4 唯一候选被翻、M1 保留", ops.Length == 4
+                    Expect("B4 唯一候选被翻、M1 保留", ops.Length == 4
                         && ops[0] == OpCodes.Ldc_I4_1 && ops[1] == OpCodes.Ret
                         && ops[2] == OpCodes.Ldc_I4_M1 && ops[3] == OpCodes.Ret);
                 }
@@ -192,7 +192,7 @@ namespace AicPatchTester
                     cd.Instructions.Add(new Instruction(OpCodes.Ret));
                 }))
                 {
-                    Expect(failures, "C1 无候选 → NotFound", MosaicPatcher.Inspect(c) == MosaicPatcher.InspectState.NotFound);
+                    Expect("C1 无候选 → NotFound", MosaicPatcher.Inspect(c) == MosaicPatcher.InspectState.NotFound);
                 }
                 else { Console.WriteLine("   [FAIL] CaseC 构造失败"); _synthFailures++; }
             }
@@ -204,7 +204,7 @@ namespace AicPatchTester
             return _synthFailures;
         }
 
-        private static void Expect(int failures, string name, bool ok)
+        private static void Expect(string name, bool ok)
         {
             Console.WriteLine("   [" + (ok ? "OK" : "FAIL") + "] " + name);
             if (!ok) _synthFailures++;

@@ -1,4 +1,4 @@
-# modernization/ — Alice In Cradle 去马赛克补丁 · 现代化重写
+# src/ — Alice In Cradle 去马赛克补丁 · 现代化重写
 
 对上游 C++ 壳 + C# 子进程方案的**两个并行升级**（优化清单 #11 与 #19）：
 
@@ -33,8 +33,9 @@ DebugSettingsForm.cs       游戏调试设置窗口
 
 构建（任何装有 .NET 8/10 SDK 的机器，含 Linux）：
 ```bash
-dotnet build modernization/AIC_nomosaic_tool -c Release
-# 产物: modernization/AIC_nomosaic_tool/bin/Release/net48/AIC_nomosaic_tool.exe
+dotnet build src/AIC_nomosaic_tool -c Release
+# 产物: src/AIC_nomosaic_tool/bin/Release/net48/AIC_nomosaic_tool.exe
+# 或仓库根目录一键构建: dotnet build AIC_Nomosaic.sln -c Release
 ```
 
 ## AIC_nomosaic_bepinex（运行时插件）
@@ -44,8 +45,8 @@ dotnet build modernization/AIC_nomosaic_tool -c Release
 （Harmony 层优先生效，卸载插件后静态补丁仍继续工作）。
 
 ```bash
-dotnet build modernization/AIC_nomosaic_bepinex -c Release
-# 产物: modernization/AIC_nomosaic_bepinex/bin/Release/net48/AIC_nomosaic_bepinex.dll
+dotnet build src/AIC_nomosaic_bepinex -c Release
+# 产物: src/AIC_nomosaic_bepinex/bin/Release/net48/AIC_nomosaic_bepinex.dll
 ```
 
 安装：
@@ -59,7 +60,7 @@ dotnet build modernization/AIC_nomosaic_bepinex -c Release
 
 对真实 `Assembly-CSharp.dll` 执行 Inspect → 翻转 → 幂等 → round-trip 校验，非 0 退出码：
 ```bash
-dotnet run --project modernization/AIC_patch_tester -c Release -- path/to/Assembly-CSharp.dll
+dotnet run --project src/AIC_patch_tester -c Release -- path/to/Assembly-CSharp.dll
 ```
 CI（`.github/workflows/build.yml`）会在 windows-latest 上构建全部三个项目，
 并自动展开仓库内 ver027b/ver028b/ver029b2 三个补丁 DLL 跑验证，同时产出 `SHA256SUMS`

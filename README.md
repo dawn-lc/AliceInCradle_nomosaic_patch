@@ -28,3 +28,13 @@ Alice In Cradle(AIC)（摇篮里的爱丽丝）去除马赛克补丁
 
 ## 手动安装方法（不推荐） 
 下载对应版本补丁压缩包，解压后覆盖游戏里的 Assembly-CSharp.dll 文件（已停止支持，新版本请使用自动补丁工具！）
+
+## 目录结构（modernization 分支）
+
+| 目录 | 内容 |
+|---|---|
+| `src/` | 现代化重写：**AIC_nomosaic_tool**（C# WinForms 单文件工具）、**AIC_nomosaic_bepinex**（BepInEx/Harmony 运行时插件）、**AIC_patch_tester**（补丁逻辑验证器）。详见 [src/README.md](src/README.md) |
+| `legacy/` | 上游历史归档：`source/`（C++ 壳 + C# CLI 源码）、`patches/`（ver023-029 静态补丁包，CI 用作真实验证样本） |
+| `docs/OPTIMIZATION.md` | 针对上游的 20 项优化清单与实施状态 |
+
+一键构建：`dotnet build AIC_Nomosaic.sln -c Release`
