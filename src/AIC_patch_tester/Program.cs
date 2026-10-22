@@ -36,6 +36,9 @@ namespace AicPatchTester
             if (args.Length > 0 && File.Exists(args[0]))
                 failures += RunSyntheticTests(args[0]);
 
+            // —— GameVersion：真实 128B 头部探针 + 目录名兜底 ——
+            failures += RunGameVersionTests();
+
             // —— DebugConfig 回归：对 _debug.txt 验证读取/改写/逐字节保留 ——
             foreach (string arg in args)
             {
@@ -302,6 +305,56 @@ namespace AicPatchTester
         {
             Console.WriteLine("   [" + (ok ? "OK" : "FAIL") + "] " + name);
             if (!ok) _synthFailures++;
+        }
+
+        // ==================================================================
+        //  GameVersion 头部探针 + 目录名兜底回归
+        //  （头部样本 = 用户提供的真实 globalgamemanagers 前 128 字节，hex 精确转写）
+        // ==================================================================
+
+        private const string RealHeadHex =
+            "00000000000000000000001600000000" +
+            "00000000000004620000000000037a7c" +
+            "00000000000004a00000000000000000" +
+            "323032322e332e363266320013000000" +
+            "00130000008100000000ffffd00e6b78" +
+            "46b7c72167b16846108ca6240d000000" +
+            "00ffff592e035c5fc203d9bbeebadbc7" +
+            "9487184000000000ffff3d9597d15b2b";
+
+        private static int RunGameVersionTests()
+        {
+            Console.WriteLine("== GameVersion（真实头部 128B 探针 + 目录名兜底）");
+            _synthFailures = 0;
+
+            // —— 头部探针：128B 截断样本（不需要完整文件！）——
+            byte[] head = HexToBytes(RealHeadHex.Replace(" ", ""));
+            AicNoMosaic.GameVersion.HeadInfo h = AicNoMosaic.GameVersion.ParseHead(head);
+            Expect("H1 头部自洽", h.Ok);
+            Expect("H2 格式版本=22", h.FormatVersion == 22U);
+            Expect("H3 metadataSize=1122", h.MetadataSize == 1122UL);
+            Expect("H4 fileSize=227964", h.FileSize == 227964UL);
+            Expect("H5 dataOffset=1184", h.DataOffset == 1184UL);
+            Expect("H6 引擎=2022.3.62f2", h.EngineVersion == "2022.3.62f2");
+
+            // —— 无 globalgamemanagers 的目录 → 直接"未知"（不做目录名兜底）——
+            string baseDir = Path.Combine(Path.GetTempPath(), "aic_gv_empty");
+            string dEmpty = Path.Combine(baseDir, "EmptyGameRoot");
+            Directory.CreateDirectory(Path.Combine(dEmpty, "AliceInCradle_Data"));   // 目录存在但无文件
+            Expect("G1 无文件 → 空（UI 显示未知）",
+                AicNoMosaic.GameVersion.FromFolder(dEmpty) == "");
+
+            try { Directory.Delete(baseDir, true); } catch { }
+            Console.WriteLine(_synthFailures == 0 ? "   [OK] GameVersion 全部通过" : ("   有 " + _synthFailures + " 个失败"));
+            return _synthFailures;
+        }
+
+        private static byte[] HexToBytes(string hex)
+        {
+            var bytes = new byte[hex.Length / 2];
+            for (int i = 0; i < bytes.Length; i++)
+                bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+            return bytes;
         }
 
         private static bool BuildSynthetic(string hostDll, string outPath, Action<CilBody> filler)

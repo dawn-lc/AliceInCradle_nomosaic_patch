@@ -281,7 +281,9 @@ namespace AicNoMosaic
             AppSettings.Save();
 
             _pathLabel.Text = dir;
-            _versionLabel.Text = GameVersion.FromFolderWithFallback(dir);
+            _versionLabel.Text = string.IsNullOrEmpty(GameVersion.FromFolder(dir))
+                ? "未知"
+                : GameVersion.FromFolder(dir);
             _installButton.Enabled = true;
             _uninstallButton.Enabled = true;
             _statusLabel.Text = "";

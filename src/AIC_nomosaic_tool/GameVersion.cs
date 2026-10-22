@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -8,14 +9,17 @@ namespace AicNoMosaic
     /// <summary>
     /// 从 &lt;游戏根目录&gt;\AliceInCradle_Data\globalgamemanagers
     /// （Unity SerializedFile）解析 PlayerSettings.bundleVersion —— 即运行时
-    /// Application.version。自上游 C++ version.h 逐行移植：不依赖硬编码偏移，
-    /// 按容器结构逐级校验求得；任何一步校验失败一律返回"未知"兜底。
+    /// Application.version。
+    ///
+    /// 解析不依赖硬编码偏移：按容器结构逐级校验（头部自洽性 → 引擎版本 →
+    /// 类型表 classID → 对象表 → PlayerSettings → bundleVersion），任何一步
+    /// 校验失败一律返回"未知"兜底。
     /// </summary>
     internal static class GameVersion
     {
         private const string DataFolder = "AliceInCradle_Data";
         private const string FileName = "globalgamemanagers";
-        private const int MaxFileBytes = 64 * 1024 * 1024;
+        private const long MaxFileBytes = 64 * 1024 * 1024;
 
         public static string FromFolder(string gameFolder)
         {
@@ -26,363 +30,367 @@ namespace AicNoMosaic
                 if (!File.Exists(path)) return "";
                 var fi = new FileInfo(path);
                 if (fi.Length < 64 || fi.Length > MaxFileBytes) return "";
-                byte[] b = File.ReadAllBytes(path);
-                return ExtractVersion(b);
+                return ExtractVersion(File.ReadAllBytes(path));
             }
             catch { return ""; }
         }
 
-        /// <summary>解析失败时按上游 GetVer 的方法 2 降级：取文件夹名下划线后的部分。</summary>
-        public static string FromFolderWithFallback(string gameFolder)
+        // ============================ 容器头 ================================
+
+        /// <summary>容器头解析结果（L1 大端整数 + 元数据头引擎串）。</summary>
+        internal readonly struct HeadInfo
         {
-            string v = FromFolder(gameFolder);
-            if (!string.IsNullOrEmpty(v)) return v;
+            public readonly bool Ok;              // 头部结构自洽（公式成立且引擎串解出）
+            public readonly uint FormatVersion;
+            public readonly ulong MetadataSize;
+            public readonly ulong FileSize;       // 头部声明的文件大小（不是实际长度）
+            public readonly ulong DataOffset;
+            public readonly string EngineVersion; // 如 "2022.3.62f2"
 
-            if (string.IsNullOrEmpty(gameFolder)) return "未知";
-            string trimmed = gameFolder.TrimEnd('/', '\\');
-            if (trimmed.Length == 0) return "未知";
-            int lastSlash = trimmed.LastIndexOfAny(new[] { '/', '\\' });
-            string name = lastSlash >= 0 ? trimmed.Substring(lastSlash + 1) : trimmed;
-
-            int first = name.IndexOf('_');
-            if (first < 0) return "未知";
-            if (name.IndexOf('_', first + 1) >= 0) return "未知";
-            if (first + 1 >= name.Length) return "未知";
-            return name.Substring(first + 1);
-        }
-
-        // ============================== 字节读取 ==============================
-
-        private static uint U32BE(byte[] b, int p)
-        {
-            return ((uint)b[p] << 24) | ((uint)b[p + 1] << 16) | ((uint)b[p + 2] << 8) | b[p + 3];
-        }
-
-        private static uint U32LE(byte[] b, int p)
-        {
-            return b[p] | ((uint)b[p + 1] << 8) | ((uint)b[p + 2] << 16) | ((uint)b[p + 3] << 24);
-        }
-
-        private static int I32LE(byte[] b, int p) { return unchecked((int)U32LE(b, p)); }
-
-        private static ulong U64BE(byte[] b, int p)
-        {
-            return ((ulong)U32BE(b, p) << 32) | U32BE(b, p + 4);
-        }
-
-        private static ulong U64LE(byte[] b, int p)
-        {
-            ulong v = 0;
-            for (int i = 7; i >= 0; --i) v = (v << 8) | b[p + i];
-            return v;
-        }
-
-        private static bool InRange(int size, int off, int len)
-        {
-            return off >= 0 && len >= 0 && off <= size && len <= size - off;
-        }
-
-        private static int AlignUp(int v, int a) { return (v + (a - 1)) & ~(a - 1); }
-
-        // ============================ 字符串判定 =============================
-
-        private static bool PrintableAscii(byte[] b, int off, int len)
-        {
-            for (int i = 0; i < len; i++)
+            public HeadInfo(bool ok, uint formatVersion, ulong metadataSize,
+                ulong fileSize, ulong dataOffset, string engineVersion)
             {
-                if (b[off + i] < 0x20 || b[off + i] > 0x7E) return false;
-            }
-            return true;
-        }
-
-        // 版本样式: 1~4 段数字以 '.' 分隔，可选尾部单字母 + 可选数字
-        // 命中: "1.0" "0.29b" "0.29b2" "1.2.3"   不命中: "Very Low" "x" "0"
-        private static bool LooksLikeVersion(byte[] b, int off, int len)
-        {
-            if (len < 3 || len > 24) return false;
-            int i = 0;
-            int groups = 0;
-            for (;;)
-            {
-                int st = i;
-                while (i < len && b[off + i] >= '0' && b[off + i] <= '9') i++;
-                int digits = i - st;
-                if (digits < 1 || digits > 4) return false;
-                if (++groups > 4) return false;
-                if (i < len && b[off + i] == '.') { i++; continue; }
-                break;
-            }
-            if (groups < 2) return false;
-            if (i < len && ((b[off + i] >= 'a' && b[off + i] <= 'z') || (b[off + i] >= 'A' && b[off + i] <= 'Z')))
-            {
-                i++;
-                while (i < len && b[off + i] >= '0' && b[off + i] <= '9') i++;
-            }
-            return i == len;
-        }
-
-        // 包名样式 com.Company.Product（至少两段 '.'，且本身不是版本串）
-        private static bool LooksLikeBundleId(byte[] b, int off, int len)
-        {
-            if (len < 5 || len > 160) return false;
-            if (LooksLikeVersion(b, off, len)) return false;
-            int dots = 0;
-            for (int i = 0; i < len; i++)
-            {
-                byte c = b[off + i];
-                if (c == '.') { dots++; continue; }
-                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
-                    return false;
-            }
-            return dots >= 2;
-        }
-
-        private static string WidenAscii(byte[] b, int off, int len)
-        {
-            return Encoding.ASCII.GetString(b, off, len);
-        }
-
-        // ============================ 序列化串扫描 ===========================
-
-        private struct Candidate { public int Rel; public string Value; }
-
-        // 扫描 [base, base+size) 内所有"格式良好"的 Unity 序列化字符串。
-        // 校验: 4 字节对齐起点 + 长度 1..32 + 全可打印 ASCII + 对齐填充字节必须为 0
-        private static void ScanSerializedStrings(byte[] b, int baseOff, int size,
-            List<Candidate> versions, List<string> ids)
-        {
-            if (!InRange(b.Length, baseOff, size)) return;
-            for (int off = 0; off + 4 <= size; off += 4)
-            {
-                uint lenU = U32LE(b, baseOff + off);
-                if (lenU < 1 || lenU > 32) continue;
-                int len = (int)lenU;
-                if (off + 4 + len > size) continue;
-                if (!PrintableAscii(b, baseOff + off + 4, len)) continue;
-
-                int pad = AlignUp(len, 4);
-                if (off + 4 + pad > size || pad > 32) continue;
-                bool zeroPad = true;
-                for (int k = off + 4 + len; k < off + 4 + pad; k++)
-                    if (b[baseOff + k] != 0) { zeroPad = false; break; }
-                if (!zeroPad) continue;
-
-                int s = baseOff + off + 4;
-                if (ids != null && LooksLikeBundleId(b, s, len))
-                    ids.Add(WidenAscii(b, s, len));
-                if (versions != null && LooksLikeVersion(b, s, len))
-                {
-                    Candidate c;
-                    c.Rel = off;
-                    c.Value = WidenAscii(b, s, len);
-                    versions.Add(c);
-                }
+                Ok = ok;
+                FormatVersion = formatVersion;
+                MetadataSize = metadataSize;
+                FileSize = fileSize;
+                DataOffset = dataOffset;
+                EngineVersion = engineVersion;
             }
         }
 
-        // ============================ 对象表校验 =============================
-
-        private struct ObjEntry { public long ByteStart; public uint ByteSize; public int ClassId; }
-
-        // 只用文件自身的结构约束判定"这里是不是真的对象表"（与内容无关）
-        private static bool ValidateObjectTable(byte[] b, int countPos,
-            ulong dataOffset, ulong fileSize, List<int> classIds,
-            List<ObjEntry> objects, ulong tailSlack)
+        /// <summary>
+        /// 只解析容器头（48 字节 L1 + 元数据头里的引擎串），不触碰数据区。
+        /// 供 ExtractVersion 使用，也可只喂"文件头片段"做诊断/测试（如 128B 样本）。
+        /// </summary>
+        internal static HeadInfo ParseHead(byte[] b)
         {
-            objects.Clear();
-            if (!InRange(b.Length, countPos, 4)) return false;
-            if ((ulong)countPos + 4 > dataOffset) return false;
+            if (b.Length < 64) return default;
 
-            int count = I32LE(b, countPos);
-            if (count < 1 || count > 200000) return false;
+            // L1 头：大端整数。formatVersion@8 / metadataSize@16 / fileSize@24 / dataOffset@32
+            uint formatVersion = BinaryPrimitives.ReadUInt32BigEndian(b.AsSpan(8));
+            ulong metadataSize = BinaryPrimitives.ReadUInt64BigEndian(b.AsSpan(16));
+            ulong fileSize = BinaryPrimitives.ReadUInt64BigEndian(b.AsSpan(24));
+            ulong dataOffset = BinaryPrimitives.ReadUInt64BigEndian(b.AsSpan(32));
 
-            int first = AlignUp(countPos + 4, 8);
-            if (first > (long)dataOffset) return false;
-            ulong tableBytes = (ulong)(first - countPos) + ((ulong)count * 24UL);
-            if (tableBytes > dataOffset - (ulong)countPos) return false;
-            if (!InRange(b.Length, first, count * 24)) return false;
+            bool selfConsistent =
+                formatVersion >= 17U && formatVersion <= 24U
+                && metadataSize <= fileSize
+                && dataOffset == 48UL + (ulong)AlignUp(unchecked((int)metadataSize), 16);
+            if (!selfConsistent) return default;
 
-            ulong dataSize = fileSize - dataOffset;
-            long prev = 0;
-            int p = first;
-            for (int i = 0; i < count; i++)
-            {
-                ObjEntry o;
-                p += 8;                                   // int64 pathID（用不到）
-                o.ByteStart = unchecked((long)U64LE(b, p)); p += 8;
-                o.ByteSize = U32LE(b, p); p += 4;
-                int typeId = I32LE(b, p); p += 4;
+            // 元数据头首个字段：NUL 结尾的引擎版本串（如 "2022.3.62f2"）
+            int nul = Array.IndexOf(b, (byte)0, 48);
+            if (nul < 0 || nul - 48 > 64) return default;
+            string engineVersion = Encoding.ASCII.GetString(b, 48, nul - 48);
 
-                if (o.ByteStart < 0 || o.ByteStart < prev) return false;
-                if (o.ByteStart - prev > 64) return false;   // 相邻间隙不能过大
-                if ((ulong)o.ByteStart + o.ByteSize > dataSize) return false;
-                prev = o.ByteStart + o.ByteSize;
-
-                o.ClassId = -1;
-                if (classIds != null && typeId >= 0 && typeId < classIds.Count)
-                    o.ClassId = classIds[typeId];
-                objects.Add(o);
-            }
-            if (prev > (long)dataSize) return false;
-            return (ulong)((long)dataSize - prev) <= tailSlack;
-        }
-
-        // ====================== 字段布局表（按引擎版本） =====================
-
-        // 引擎版本前缀 -> bundleVersion 的 4 字节长度前缀在 PlayerSettings 对象内的相对偏移。
-        // 换 Unity 版本时若校验失败会自动降级为对象内扫描，缺条目也不会返回错值。
-        private static int? FindLayoutOffset(string engineVersion)
-        {
-            if (engineVersion != null && engineVersion.StartsWith("2022.3", StringComparison.Ordinal))
-                return 612;   // 实测: 长度前缀在对象内 612，字符串本体在 616
-            return null;
-        }
-
-        // 按已知相对偏移取串并做全量校验
-        private static string ReadFieldAt(byte[] b, int baseOff, int size, int rel)
-        {
-            if (!InRange(b.Length, baseOff, size)) return null;
-            if (rel + 4 > size) return null;
-            uint lenU = U32LE(b, baseOff + rel);
-            if (lenU < 1 || lenU > 32) return null;
-            int len = (int)lenU;
-            if (rel + 4 + len > size) return null;
-
-            if (!PrintableAscii(b, baseOff + rel + 4, len) || !LooksLikeVersion(b, baseOff + rel + 4, len))
-                return null;
-
-            int pad = AlignUp(len, 4);
-            if (rel + 4 + pad > size || pad > 32) return null;
-            for (int k = rel + 4 + len; k < rel + 4 + pad; k++)
-                if (b[baseOff + k] != 0) return null;
-
-            return WidenAscii(b, baseOff + rel + 4, len);
+            return new HeadInfo(true, formatVersion, metadataSize, fileSize, dataOffset, engineVersion);
         }
 
         // ============================== 核心提取 =============================
 
         private static string ExtractVersion(byte[] b)
         {
-            int n = b.Length;
-            if (n < 64) return null;
+            if (b.Length < 64) return null;
 
-            // ---- L1: 文件头 48 字节（大端）----
-            uint formatVersion = U32BE(b, 8);
-            ulong metadataSize = U64BE(b, 16);
-            ulong fileSize = U64BE(b, 24);
-            ulong dataOffset = U64BE(b, 32);
+            // ---- L1+L2 前半：容器头（结构性校验），声明大小必须等于实际长度 ----
+            HeadInfo head = ParseHead(b);
+            if (!head.Ok || head.FileSize != (ulong)b.Length) return null;   // 截断/伪装文件
 
-            if (formatVersion < 17 || formatVersion > 24) return null;
-            if (fileSize != (ulong)n) return null;
-            if (metadataSize > (ulong)n) return null;
-            if (dataOffset != 48UL + (ulong)AlignUp((int)metadataSize, 16)) return null;
-
-            // ---- L2: 元数据头（小端）----
-            int e = 48;
-            while (e < n && b[e] != 0) e++;
-            if (e >= n || e - 48 > 64) return null;
-            string engineVersion = Encoding.ASCII.GetString(b, 48, e - 48);
-
-            int pos = AlignUp(e + 1, 4);
-            if (!InRange(n, pos, 9)) return null;
-            pos += 4;                                   // int32 targetPlatform
-            bool enableTypeTree = b[pos] != 0; pos += 1;
-            int typeCount = I32LE(b, pos); pos += 4;
+            // ---- L2 后半：类型表入口 ----
+            int pos = AlignUp(48 + head.EngineVersion.Length + 1, 4);
+            pos += 4;                                   // int32 targetPlatform（用不到）
+            bool enableTypeTree = b[pos] != 0;
+            int typeCount = BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(pos + 1));
             if (typeCount < 0 || typeCount > 200000) return null;
-
-            int typeTableStart = pos;
+            int typeTableStart = pos + 5;
 
             // ---- L3a: 类型表（只取 classID 列表；失败也不影响后续）----
+            // 条目 = int32 classID + uint8 isStripped + int16 scriptTypeIndex + 16B 哈希；
+            // classID==114 的条目（脚本引用）额外多 16 字节。
             List<int> classIds = null;
-            bool haveClassIds = false;
-            if (!enableTypeTree)
-            {
-                classIds = new List<int>(Math.Min(typeCount, 100000));
-                int p = pos;
-                bool ok = true;
-                for (int i = 0; i < typeCount; i++)
-                {
-                    if (!InRange(n, p, 23)) { ok = false; break; }
-                    int cid = I32LE(b, p);
-                    p += 4 + 1 + 2 + 16;
-                    if (cid != 114) { /* 普通条目 */ }
-                    else
-                    {
-                        if (!InRange(n, p, 16)) { ok = false; break; }
-                        p += 16;
-                    }
-                    classIds.Add(cid);
-                }
-                if (ok) { haveClassIds = true; pos = p; }
-                else classIds = null;
-            }
+            if (!enableTypeTree && TryReadClassIds(b, typeTableStart, typeCount, out classIds, out int afterTypes))
+                pos = afterTypes;
 
             // ---- L3b: 定位对象表（先按位置推算，再用结构判据回查）----
-            var objects = new List<ObjEntry>();
+            var objects = new List<ObjInfo>();
             ulong[] slacks = { 0UL, 8192UL };
-            int limit = (int)Math.Min(dataOffset, (ulong)int.MaxValue);
-            int scanEnd = Math.Min(limit, typeTableStart + (2 << 20));   // 回查范围限 2MB
+            int scanEnd = Math.Min((int)Math.Min(head.DataOffset, int.MaxValue), typeTableStart + (2 << 20));
 
             bool located = false;
             for (int k = 0; k < 2 && !located; k++)
             {
-                if (haveClassIds && ValidateObjectTable(b, pos, dataOffset, fileSize, classIds, objects, slacks[k]))
-                {
-                    located = true;
-                    break;
-                }
+                if (classIds != null && TryReadObjectTable(b, pos, head.DataOffset, head.FileSize, classIds, objects, slacks[k]))
+                { located = true; break; }
+
                 objects.Clear();
                 for (int cand = typeTableStart; cand + 4 <= scanEnd; cand++)
                 {
-                    if (ValidateObjectTable(b, cand, dataOffset, fileSize, haveClassIds ? classIds : null, objects, slacks[k]))
-                    {
-                        located = true;
-                        break;
-                    }
+                    if (TryReadObjectTable(b, cand, head.DataOffset, head.FileSize, classIds, objects, slacks[k]))
+                    { located = true; break; }
                     objects.Clear();
                 }
             }
             if (!located) return null;
 
-            // ---- L4: 定位 PlayerSettings 优先 classID==129；类型表可用时按内容特征兜底 ----
-            int psIndex = -1;
-            for (int i = 0; i < objects.Count; i++)
-                if (objects[i].ClassId == 129) { psIndex = i; break; }
+            // ---- L4: 定位 PlayerSettings（优先 classID==129；否则按内容特征兜底）----
+            ObjInfo? ps = FindPlayerSettings(b, (int)head.DataOffset, objects);
+            if (ps == null || ps.Value.Size == 0) return null;
 
-            if (psIndex < 0)
-            {
-                int best = int.MaxValue;
-                for (int i = 0; i < objects.Count; i++)
-                {
-                    if (objects[i].ByteSize == 0 || objects[i].ByteStart < 0) continue;
-                    int baseOff = (int)dataOffset + (int)objects[i].ByteStart;
-                    if (!InRange(n, baseOff, (int)objects[i].ByteSize)) continue;
-                    var v = new List<Candidate>();
-                    var ids = new List<string>();
-                    ScanSerializedStrings(b, baseOff, (int)objects[i].ByteSize, v, ids);
-                    if (v.Count == 0 || ids.Count == 0) continue;
-                    if (v.Count < best) { best = v.Count; psIndex = i; }
-                }
-            }
-            if (psIndex < 0 || objects[psIndex].ByteSize == 0) return null;
+            // ---- L5: bundleVersion 字符串 ----
+            // 快路：已知引擎布局（2022.3 实测长度前缀在对象内 612）；失败自动降级为扫描。
+            var objData = new ReadOnlySpan<byte>(b, (int)head.DataOffset + ps.Value.Start, ps.Value.Size);
+            string quick = TryReadVersionField(objData, FindLayoutOffset(head.EngineVersion));
+            if (quick != null) return quick;
 
-            int psBase = (int)dataOffset + (int)objects[psIndex].ByteStart;
-            int psSize = (int)objects[psIndex].ByteSize;
-            if (!InRange(n, psBase, psSize)) return null;
-
-            // ---- L5: 定位字段（布局表 + 校验；失败则对象内扫描）----
-            int? rel = FindLayoutOffset(engineVersion);
-            if (rel.HasValue)
-            {
-                string val = ReadFieldAt(b, psBase, psSize, rel.Value);
-                if (!string.IsNullOrEmpty(val)) return val;
-            }
-
-            var cands = new List<Candidate>();
-            ScanSerializedStrings(b, psBase, psSize, cands, null);
-            if (cands.Count == 0) return null;
-            // 观测: bundleVersion 是该对象内最后一个版本样串
-            return cands[cands.Count - 1].Value;
+            // 慢路：观测 bundleVersion 是 PlayerSettings 对象内最后一个版本样式串
+            var (versions, _) = CollectSerializedStrings(objData, wantVersions: true, wantBundleIds: false);
+            return versions.Count > 0 ? versions[versions.Count - 1].Value : null;
         }
+
+        // ============================ 类型表 ================================
+
+        private static bool TryReadClassIds(byte[] b, int start, int typeCount,
+            out List<int> classIds, out int next)
+        {
+            classIds = new List<int>(Math.Min(typeCount, 100000));
+            next = start;
+            int p = start;
+            for (int i = 0; i < typeCount; i++)
+            {
+                if (p + 23 > b.Length) return false;
+                int classId = BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(p));
+                p += 4 + 1 + 2 + 16;                 // classID + isStripped + scriptTypeIndex + 哈希
+                if (classId == 114) p += 16;         // 脚本引用条目：本地哈希 16B
+                classIds.Add(classId);
+            }
+            next = p;
+            return true;
+        }
+
+        // ============================ 对象表 ================================
+
+        private readonly struct ObjInfo
+        {
+            public readonly int Start;               // 数据区内偏移
+            public readonly int Size;
+            public readonly int ClassId;             // 类型表不可用时为 -1
+
+            public ObjInfo(int start, int size, int classId)
+            { Start = start; Size = size; ClassId = classId; }
+        }
+
+        /// <summary>
+        /// 只用文件自身的结构约束判定"这里是不是真的对象表"（与内容无关）：
+        /// 数量合理、表不越过数据区、byteStart 单调不减且间隙 &lt;64、对象都落在数据区内。
+        /// </summary>
+        private static bool TryReadObjectTable(byte[] b, int countPos,
+            ulong dataOffset, ulong fileSize, List<int> classIds,
+            List<ObjInfo> objects, ulong tailSlack)
+        {
+            objects.Clear();
+            if (countPos < 0 || countPos + 4 > b.Length || countPos + 4 > (long)dataOffset) return false;
+
+            int count = BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(countPos));
+            if (count < 1 || count > 200000) return false;
+
+            int first = AlignUp(countPos + 4, 8);
+            if (first > b.Length || count * 24 > b.Length - first) return false;
+            if ((ulong)(first - countPos) + (ulong)count * 24UL > dataOffset - (ulong)countPos) return false;
+
+            ulong dataSize = fileSize - dataOffset;
+            int p = first;
+            long prev = 0;
+            for (int i = 0; i < count; i++)
+            {
+                p += 8;                                                        // int64 pathID（用不到）
+                long byteStart = unchecked((long)BinaryPrimitives.ReadUInt64LittleEndian(b.AsSpan(p)));
+                uint byteSize = BinaryPrimitives.ReadUInt32LittleEndian(b.AsSpan(p + 8));
+                int typeId = BinaryPrimitives.ReadInt32LittleEndian(b.AsSpan(p + 12));
+                p += 20;
+
+                if (byteStart < 0 || byteStart < prev || byteStart - prev > 64) return false;
+                if ((ulong)byteStart + byteSize > dataSize) return false;
+                prev = byteStart + byteSize;
+
+                int classId = classIds != null && typeId >= 0 && typeId < classIds.Count
+                    ? classIds[typeId]
+                    : -1;
+                objects.Add(new ObjInfo((int)byteStart, unchecked((int)byteSize), classId));
+            }
+
+            return prev <= (long)dataSize && (ulong)((long)dataSize - prev) <= tailSlack;
+        }
+
+        // ================== PlayerSettings 定位与版本串 ======================
+
+        private static ObjInfo? FindPlayerSettings(byte[] b, int dataOffset, List<ObjInfo> objects)
+        {
+            foreach (var o in objects)
+                if (o.ClassId == 129) return o;
+
+            // 类型表不可用时按内容特征兜底：对象内同时含版本样式串与包名样式串，
+            // 取版本候选最少者（PlayerSettings 只有几个候选）。
+            ObjInfo? best = null;
+            int bestCount = int.MaxValue;
+            foreach (var o in objects)
+            {
+                if (o.Size == 0 || o.Start < 0 || (long)dataOffset + o.Start + o.Size > b.Length) continue;
+                var slice = new ReadOnlySpan<byte>(b, dataOffset + o.Start, o.Size);
+                var (versions, bundleIds) = CollectSerializedStrings(slice, wantVersions: true, wantBundleIds: true);
+                if (versions.Count == 0 || bundleIds.Count == 0) continue;
+                if (versions.Count < bestCount) { bestCount = versions.Count; best = o; }
+            }
+            return best;
+        }
+
+        // 引擎版本前缀 -> bundleVersion 的长度前缀在 PlayerSettings 对象内的相对偏移。
+        // 换 Unity 版本时校验失败会自动降级为对象内扫描，缺条目也不会返回错值。
+        private static int? FindLayoutOffset(string engineVersion)
+        {
+            return engineVersion != null && engineVersion.StartsWith("2022.3", StringComparison.Ordinal)
+                ? 612                     // 实测: 长度前缀在对象内 612，字符串本体在 616
+                : (int?)null;
+        }
+
+        /// <summary>按已知相对偏移读取 bundleVersion 串（做完整校验）。</summary>
+        private static string TryReadVersionField(ReadOnlySpan<byte> obj, int? rel)
+        {
+            if (rel == null || rel.Value + 4 > obj.Length) return null;
+
+            uint lenU = BinaryPrimitives.ReadUInt32LittleEndian(obj.Slice(rel.Value));
+            if (lenU < 1U || lenU > 32U || (long)rel.Value + 4 + lenU > (long)obj.Length) return null;
+
+            int len = (int)lenU;
+            var body = obj.Slice(rel.Value + 4, len);
+            if (!IsPrintableAscii(body) || !LooksLikeVersion(Ascii(body))) return null;
+
+            int padded = AlignUp(len, 4);
+            if (rel.Value + 4 + padded > obj.Length) return null;
+            foreach (byte padByte in obj.Slice(rel.Value + 4 + len, padded - len))
+                if (padByte != 0) return null;
+
+            return Ascii(body);
+        }
+
+        // ============================ 序列化串扫描 ===========================
+
+        private readonly struct StrCandidate
+        {
+            public readonly int Offset;           // 对象内相对偏移（指向长度前缀）
+            public readonly string Value;
+
+            public StrCandidate(int offset, string value) { Offset = offset; Value = value; }
+        }
+
+        private static (List<StrCandidate> versions, List<string> bundleIds) CollectSerializedStrings(
+            ReadOnlySpan<byte> obj, bool wantVersions, bool wantBundleIds)
+        {
+            var versions = wantVersions ? new List<StrCandidate>() : null;
+            var bundleIds = new List<string>();
+
+            for (int off = 0; off + 4 <= obj.Length; off += 4)
+            {
+                uint lenU = BinaryPrimitives.ReadUInt32LittleEndian(obj.Slice(off));
+                if (lenU < 1U || lenU > 32U || off + 4 + (long)lenU > (long)obj.Length) continue;
+                int len = (int)lenU;
+
+                var body = obj.Slice(off + 4, len);
+                if (!IsPrintableAscii(body)) continue;
+
+                int padded = AlignUp(len, 4);
+                if (off + 4 + padded > obj.Length) continue;
+                bool zeroPad = true;
+                foreach (byte padByte in obj.Slice(off + 4 + len, padded - len))
+                    if (padByte != 0) { zeroPad = false; break; }
+                if (!zeroPad) continue;
+
+                string value = Ascii(body);
+                if (wantVersions && LooksLikeVersion(value))
+                    versions.Add(new StrCandidate(off, value));
+                if (wantBundleIds && LooksLikeBundleId(value))
+                    bundleIds.Add(value);
+            }
+            return (versions, bundleIds);
+        }
+
+        // ============================= 字符串判定 ============================
+
+        private static bool IsPrintableAscii(ReadOnlySpan<byte> s)
+        {
+            foreach (byte c in s)
+                if (c < 0x20 || c > 0x7E) return false;
+            return true;
+        }
+
+        // 版本样式: 1~4 段数字以 '.' 分隔，可选尾部单字母 + 数字
+        // 命中: "1.0" "0.29b" "0.29b2" "1.2.3"   不命中: "Very Low" "x" "0"
+        private static bool LooksLikeVersion(string s)
+        {
+            if (s.Length < 3 || s.Length > 24) return false;
+
+            var parts = s.Split('.');
+            if (parts.Length < 2 || parts.Length > 4) return false;
+
+            for (int i = 0; i < parts.Length; i++)
+            {
+                if (parts[i].Length < 1 || parts[i].Length > 4) return false;   // 每段 1~4 位
+                string part = parts[i];
+
+                if (i < parts.Length - 1)
+                {
+                    if (!IsDigits(part)) return false;             // 中间段必须纯数字
+                    continue;
+                }
+
+                // 末段: 数字 + 可选单字母 + 可选数字（"29" / "29b" / "29b2"）
+                int digits = 0;
+                while (digits < part.Length && IsAsciiDigit(part[digits])) digits++;
+                if (digits == 0) return false;
+                if (digits == part.Length) return true;
+
+                if (digits + 1 > part.Length - digits) return false; // 只允许 1 个字母
+                if (!IsAsciiLetter(part[digits])) return false;
+                int trailing = part.Length - (digits + 1);
+                return trailing == 0 || (trailing == 1 && IsAsciiDigit(part[digits + 1]));
+            }
+            return true;
+        }
+
+        // 包名样式 com.Company.Product：至少两段 '.'，本身不是版本串
+        private static bool LooksLikeBundleId(string s)
+        {
+            if (s.Length < 5 || s.Length > 160 || LooksLikeVersion(s)) return false;
+            int dots = 0;
+            foreach (char c in s)
+            {
+                if (c == '.') { dots++; continue; }
+                if (!(IsAsciiLetterOrDigit(c) || c == '_' || c == '-')) return false;
+            }
+            return dots >= 2;
+        }
+
+        private static bool IsDigits(string s)
+        {
+            if (s.Length == 0) return false;
+            foreach (char c in s)
+                if (!IsAsciiDigit(c)) return false;
+            return true;
+        }
+
+        private static int AlignUp(int v, int align) => (v + (align - 1)) & ~(align - 1);
+
+        // net48 兼容：char.IsAsciiXxx 是 .NET 7+ API；ASCII 区间判断语义等价
+        private static bool IsAsciiDigit(char c) => c >= '0' && c <= '9';
+
+        private static bool IsAsciiLetter(char c)
+            => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+
+        private static bool IsAsciiLetterOrDigit(char c)
+            => IsAsciiLetter(c) || IsAsciiDigit(c);
+
+        /// <summary>net48 无 Span 重载：ASCII span → 字符串（小串，拷贝代价可接受）</summary>
+        private static string Ascii(ReadOnlySpan<byte> body)
+            => Encoding.ASCII.GetString(body.ToArray());
     }
 }

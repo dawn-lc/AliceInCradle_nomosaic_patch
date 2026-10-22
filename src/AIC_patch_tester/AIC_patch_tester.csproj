@@ -23,6 +23,7 @@
   <ItemGroup>
     <Compile Include="..\AIC_nomosaic_tool\MosaicPatcher.cs" Link="MosaicPatcher.cs" />
     <Compile Include="..\AIC_nomosaic_tool\DebugConfig.cs" Link="DebugConfig.cs" />
+    <Compile Include="..\AIC_nomosaic_tool\GameVersion.cs" Link="GameVersion.cs" />
   </ItemGroup>
 
 </Project>
