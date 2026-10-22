@@ -238,11 +238,16 @@ namespace AicNoMosaic
         private void RunPatching(Action core, string verb)
         {
             SetButtonsEnabled(false);
-            _statusLabel.Text = "正在" + verb + "…";
+            _statusLabel.Text = "正在" + verb + "…（约 5~10 秒）";
             Cursor = Cursors.WaitCursor;
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 core();
+                // 成功路径：core() 里的 MessageBox 被用户确认后返回，在此收尾状态栏
+                //（修复：此前"正在安装…"在成功后永久残留）
+                _statusLabel.Text = verb + "完成，耗时 "
+                    + stopwatch.Elapsed.TotalSeconds.ToString("0.0") + " 秒";
             }
             catch (UnauthorizedAccessException)
             {
@@ -253,6 +258,7 @@ namespace AicNoMosaic
                 {
                     if (Elevation.RestartAsAdmin()) Close();
                 }
+                _statusLabel.Text = verb + "失败（无写入权限）";
             }
             catch (Exception ex)
             {
