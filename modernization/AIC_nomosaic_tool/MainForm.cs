@@ -297,7 +297,10 @@ namespace AicNoMosaic
             }
 
             // ---- dnlib 进程内改 IL，输出到同目录临时文件 ----
-            var status = MosaicPatcher.Apply(dll, install, temp);
+            // 语义匹配：install=true 是「安装去码」→ 马赛克禁用（mosaicEnabled=false）；卸载反之。
+            // 此前直接把 install 传进 mosaicEnabled 导致语义完全反转（0.30i 实测：
+            // 点「安装去码」却报「补丁已安装」）。
+            var status = MosaicPatcher.Apply(dll, !install, temp);
 
             switch (status)
             {
@@ -320,9 +323,13 @@ namespace AicNoMosaic
                     return;
             }
 
-            // Success：先备份原始 DLL（幂等，只备份一次），再原子替换
-            if (!restoreBackup && !File.Exists(backup))
+            // Success：先备份原始 DLL（幂等，只备份一次），再原子替换。
+            // 只在「确实是原版状态」时备份，避免把已打补丁的文件误存为 .bak。
+            if (!restoreBackup && !File.Exists(backup)
+                && MosaicPatcher.Inspect(dll) == MosaicPatcher.InspectState.MosaicOn)
+            {
                 File.Copy(dll, backup, false);
+            }
 
             ReplaceAtomically(temp, dll);
 
