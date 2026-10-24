@@ -127,7 +127,9 @@ namespace AicNoMosaic
             _chooseButton.Click += (s, e) => ChooseGameFolder();
             AddRow(_chooseButton);
 
-            // ── ② 信息区：嵌套 Grid（标签列固定 96px + 数值列 100%）──
+            // ── ② 信息区：嵌套 Grid（标签列 AutoSize 跟随标签；数值列固定宽 + AutoEllipsis）──
+            // 数值列必须固定宽：路径/状态可能很长，AutoSize 会被内容撑爆窗体；
+            // 固定宽 + AutoEllipsis 则长路径优雅省略号，短文本不内外拉扯
             _versionLabel = InfoValue("未知", baseFont);
             _pathLabel = InfoValue("", smallFont);
             _pathLabel.ForeColor = Color.DimGray;
@@ -141,9 +143,8 @@ namespace AicNoMosaic
                 Margin = new Padding(0),
                 Anchor = AnchorStyles.None,       // 所有块都在列内居中，同一参考系
             };
-            // 全 AutoSize 列：中间列宽由内容决定，数列在 AutoEllipsis 控制下不溢出
             infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280));   // 数值列固定宽
             infoGrid.Controls.Add(InfoKey("游戏版本：", baseFont), 0, 0);
             infoGrid.Controls.Add(_versionLabel, 1, 0);
             infoGrid.Controls.Add(InfoKey("游戏路径：", baseFont), 0, 1);
@@ -152,7 +153,7 @@ namespace AicNoMosaic
             infoGrid.Controls.Add(_stateLabel, 1, 2);
             AddRow(infoGrid);
 
-            // ── ③ 操作按钮：嵌套 Grid 两列各 50%，按钮 Dock 撑满单元格 ──
+            // ── ③ 操作按钮：两列固定等宽 + 按钮 Dock.Fill（文字完整、两按钮严格同宽）──
             _installButton = new Button
             {
                 Text = "② 安装去码补丁",
@@ -177,21 +178,22 @@ namespace AicNoMosaic
                 Margin = new Padding(0),
                 Anchor = AnchorStyles.None,       // 与 infoGrid 同参考系，两块中轴对齐
             };
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
             buttonGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             buttonGrid.Controls.Add(_installButton, 0, 0);
             buttonGrid.Controls.Add(_uninstallButton, 1, 0);
             AddRow(buttonGrid);
 
-            // ── 动态状态（安装中/完成/失败），紧贴操作区 ──
+            // ── 动态状态（安装中/完成/失败），紧贴操作区；固定宽+Ellipsis 防撑爆 ──
             _statusLabel = new Label
             {
                 Text = "",
                 Font = smallFont,
                 ForeColor = Color.DimGray,
-                AutoSize = true,
-                AutoEllipsis = false,
+                AutoSize = false,
+                Height = 20,
+                AutoEllipsis = true,
                 Margin = new Padding(0, 10, 0, 0),
             };
             AddRow(_statusLabel);
@@ -215,7 +217,11 @@ namespace AicNoMosaic
             {
                 Text = text,
                 Font = font,
-                AutoSize = true,
+                AutoSize = false,
+                Width = 280,                      // 与 infoGrid 绝对列宽同步
+                Height = 20,
+                TextAlign = ContentAlignment.MiddleLeft,
+                AutoEllipsis = true,
                 Margin = new Padding(0, 7, 0, 2),
             };
         }
