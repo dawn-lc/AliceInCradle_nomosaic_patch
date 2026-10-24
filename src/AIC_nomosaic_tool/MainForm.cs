@@ -86,6 +86,7 @@ namespace AicNoMosaic
                 Padding = new Padding(24, 8, 24, 12),   // 左右对称 —— 内容居中不偏轴
             };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            Controls.Add(menu);
             Controls.Add(root);
 
             int rowIndex = 0;
@@ -95,9 +96,6 @@ namespace AicNoMosaic
                 root.Controls.Add(control, 0, rowIndex++);
             }
 
-            // ---- 首行：MenuStrip 作普通行，消除与标题的遮挡；MainMenuStrip 仍生效 ----
-            AddRow(menu);
-
             // ── 标题区（Anchor=None → 在 100% 宽单元格里水平居中）──
             _titleLabel = new Label
             {
@@ -106,13 +104,13 @@ namespace AicNoMosaic
                 ForeColor = Color.Black,
                 AutoSize = true,
                 Anchor = AnchorStyles.None,
-                Margin = new Padding(0, 10, 0, 0),
+                Margin = new Padding(0, 20, 0, 0),
             };
             AddRow(_titleLabel);
 
             var subtitle = new Label
             {
-                Text = "全版本通用补丁（C# 重写版）",
+                Text = "全版本通用补丁",
                 ForeColor = Color.DimGray,
                 AutoSize = true,
                 Anchor = AnchorStyles.None,

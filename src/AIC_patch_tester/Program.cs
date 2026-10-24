@@ -297,8 +297,10 @@ namespace AicPatchTester
                 }
                 else { Console.WriteLine("   [FAIL] CaseB 构造失败"); _synthFailures++; }
 
-                // Case C：无字面量候选（结构完全改动）→ NotFound
+                // Case C：无字面量候选（结构完全改动）
+                // Inspect → NotFound（透明报告）；Apply → 常量体兜底（BepInEx 同构）
                 string c = Path.Combine(work, "caseC.dll");
+                string cOut = Path.Combine(work, "caseC_out.dll");
                 if (BuildSynthetic(hostGameDll, c, cd =>
                 {
                     cd.Instructions.Add(new Instruction(OpCodes.Ldc_I4_2));
@@ -307,7 +309,12 @@ namespace AicPatchTester
                     cd.Instructions.Add(new Instruction(OpCodes.Ret));
                 }))
                 {
-                    Expect("C1 无候选 → NotFound", MosaicPatcher.Inspect(c) == MosaicPatcher.InspectState.NotFound);
+                    Expect("C1 Inspect → NotFound（透明）", MosaicPatcher.Inspect(c) == MosaicPatcher.InspectState.NotFound);
+                    Expect("C2 Apply → 常量体兜底成功", MosaicPatcher.Apply(c, false, cOut) == MosaicPatcher.PatchStatus.Success);
+                    OpCode[] ops = ReadOpcodes(cOut);
+                    Expect("C3 兜底体为 {ldc.i4.0, ret}", ops.Length == 2
+                        && ops[0] == OpCodes.Ldc_I4_0 && ops[1] == OpCodes.Ret);
+                    Expect("C4 兜底后 Inspect → MosaicOff", MosaicPatcher.Inspect(cOut) == MosaicPatcher.InspectState.MosaicOff);
                 }
                 else { Console.WriteLine("   [FAIL] CaseC 构造失败"); _synthFailures++; }
             }
