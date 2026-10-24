@@ -85,6 +85,7 @@ namespace AicNoMosaic
                 Padding = new Padding(24, 8, 24, 12),   // 左右对称 —— 内容居中不偏轴
             };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            Controls.Add(menu);      // 后加者先布局：MenuStrip 贴顶，root 从其下方开始
             Controls.Add(root);
 
             int rowIndex = 0;
