@@ -144,7 +144,7 @@ namespace AicNoMosaic
                 Anchor = AnchorStyles.None,       // 所有块都在列内居中，同一参考系
             };
             infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280));   // 数值列固定宽
+            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 320));   // 数值列固定宽（检测出的最长路径）
             infoGrid.Controls.Add(InfoKey("游戏版本：", baseFont), 0, 0);
             infoGrid.Controls.Add(_versionLabel, 1, 0);
             infoGrid.Controls.Add(InfoKey("游戏路径：", baseFont), 0, 1);
@@ -218,7 +218,7 @@ namespace AicNoMosaic
                 Text = text,
                 Font = font,
                 AutoSize = false,
-                Width = 280,                      // 与 infoGrid 绝对列宽同步
+                Width = 320,                      // 与 infoGrid 绝对列宽同步
                 Height = 20,
                 TextAlign = ContentAlignment.MiddleLeft,
                 AutoEllipsis = true,
