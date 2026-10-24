@@ -57,6 +57,9 @@ namespace AicPatchTester
                     failures += RunShaManifestTests(shaTxt);
             }
 
+            // —— BepInExDeployer 回归：框架判定 / 插件幂等释放与移除（与真实游戏目录无关，纯合成） ——
+            failures += RunBepInExDeployerTests();
+
             foreach (string dll in args)
             {
                 if (!File.Exists(dll))
@@ -226,6 +229,72 @@ namespace AicPatchTester
             catch (Exception ex)
             {
                 Console.WriteLine("   [FAIL] DebugConfig 测试异常: " + ex.Message);
+                failures++;
+            }
+            finally
+            {
+                try { Directory.Delete(work, true); } catch { }
+            }
+            return failures;
+        }
+
+        // ==================================================================
+        //  BepInExDeployer 回归：框架判定 / 幂等释放 / 移除（纯合成目录）
+        // ==================================================================
+
+        private static int RunBepInExDeployerTests()
+        {
+            Console.WriteLine("== BepInExDeployer（合成目录：框架判定/幂等释放/移除）");
+            int failures = 0;
+            string work = Path.Combine(Path.GetTempPath(), "aic_bepinex_test");
+            try
+            {
+                Directory.CreateDirectory(work);
+
+                // 1) 框架判定：无 BepInEx → false
+                Expect("E1 无框架 → false", !AicNoMosaic.BepInExDeployer.IsFrameworkPresent(work));
+
+                // 2) 只建 plugins/（异常结构）→ 仍 false（判定只认 core/BepInEx.dll）
+                Directory.CreateDirectory(Path.Combine(work, "BepInEx", "plugins"));
+                Expect("E2 仅 plugins 目录 → false", !AicNoMosaic.BepInExDeployer.IsFrameworkPresent(work));
+
+                // 3) 建立 core/BepInEx.dll → true
+                Directory.CreateDirectory(Path.Combine(work, "BepInEx", "core"));
+                File.WriteAllBytes(Path.Combine(work, "BepInEx", "core", "BepInEx.dll"), new byte[] { 1, 2, 3 });
+                Expect("E3 core/BepInEx.dll → true", AicNoMosaic.BepInExDeployer.IsFrameworkPresent(work));
+
+                byte[] payloadA = { 0xAA, 0xBB, 0xCC };
+                byte[] payloadB = { 0x11, 0x22, 0x33, 0x44 };
+                string pluginPath = AicNoMosaic.BepInExDeployer.PluginPath(work);
+
+                // 4) 未装时插件路径不存在，Remove 是 no-op
+                Expect("D1 未装 → Plugin 不存在 / Remove=no-op",
+                    !AicNoMosaic.BepInExDeployer.IsPluginInstalled(work)
+                    && !AicNoMosaic.BepInExDeployer.RemovePlugin(work));
+
+                // 5) 首次释放 → 写入且内容一致（plugins/ 目录自动创建）
+                Expect("D2 首次释放写入", AicNoMosaic.BepInExDeployer.ExtractPlugin(work, payloadA));
+                Expect("D3 内容落位plugins/", File.ReadAllBytes(pluginPath).Length == payloadA.Length);
+
+                // 6) 幂等：同 payload 再放 → 不写（mtime 不变）
+                var mtimeBefore = File.GetLastWriteTimeUtc(pluginPath);
+                Expect("D4 同内容幂等跳过", !AicNoMosaic.BepInExDeployer.ExtractPlugin(work, payloadA));
+                Expect("D5 幂等未触碰（mtime 不变）", File.GetLastWriteTimeUtc(pluginPath) == mtimeBefore);
+
+                // 7) 更新：不同 payload → 重写为新内容（temp+原子替换）
+                Expect("D6 新版本重写", AicNoMosaic.BepInExDeployer.ExtractPlugin(work, payloadB));
+                byte[] after = File.ReadAllBytes(pluginPath);
+                Expect("D7 更新后内容一致",
+                    after.Length == payloadB.Length && after[0] == payloadB[0] && after[3] == payloadB[3]);
+
+                // 8) 移除 → 文件消失；再移除 → no-op
+                Expect("D8 Remove 删除成功", AicNoMosaic.BepInExDeployer.RemovePlugin(work));
+                Expect("D9 删除后不存在 / 二次 Remove=no-op",
+                    !File.Exists(pluginPath) && !AicNoMosaic.BepInExDeployer.RemovePlugin(work));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("   [FAIL] BepInExDeployer 测试异常: " + ex.Message);
                 failures++;
             }
             finally

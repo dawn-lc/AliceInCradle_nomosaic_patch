@@ -42,4 +42,24 @@
     <None Include="third_party\dnlib.LICENSE.txt" />
   </ItemGroup>
 
+  <!-- 只为构建顺序服务：保证 bepinex 插件产物先于本工具编译
+       （ReferenceOutputAssembly=false → 不引用类型、不复制输出文件） -->
+  <ItemGroup>
+    <ProjectReference Include="..\AIC_nomosaic_bepinex\AIC_nomosaic_bepinex.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <Private>false</Private>
+    </ProjectReference>
+  </ItemGroup>
+
+  <!-- BepInEx 插件随主工具单文件发布：执行期（Compile/资源清单定稿前）收集
+       bepinex 产物并嵌入为资源。不能用静态 ItemGroup Include —— 冷构建时
+       bin/ 尚无产物，评估期会静默丢资源 -->
+  <Target Name="EmbedBepInExPlugin" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <EmbeddedResource
+        Include="..\AIC_nomosaic_bepinex\bin\$(Configuration)\net48\AIC_nomosaic_bepinex.dll"
+        LogicalName="AIC_nomosaic_bepinex.dll" />
+    </ItemGroup>
+  </Target>
+
 </Project>

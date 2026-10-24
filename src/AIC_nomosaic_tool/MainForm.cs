@@ -206,7 +206,8 @@ namespace AicNoMosaic
             var tip = new Label
             {
                 Text = "安装/卸载均需约 5~10 秒，请勿重复操作\n" +
-                    "安装时自动备份原始 DLL（Assembly-CSharp.dll.bak）",
+                    "检测到 BepInEx 时自动改用插件方式（免改游戏文件，删除插件即还原）\n" +
+                    "无 BepInEx 时安装自动备份原始 DLL（Assembly-CSharp.dll.bak）",
                 Font = smallFont,
                 ForeColor = Color.Firebrick,
                 AutoSize = true,
@@ -352,16 +353,29 @@ namespace AicNoMosaic
             VerifyOrIoFailed,    // 内部校验/IO 失败
             BlockedInUse,        // 游戏文件被占用
             NoGameRoot,          // 未选择游戏目录
+            PluginDeployed,      // 已释放/更新 BepInEx 插件（免改游戏文件）
+            PluginFresh,         // 插件已是当前版本（无需重复写入）
+            PluginRemoved,       // 已移除 BepInEx 插件
+        }
+
+        /// <summary>
+        /// 补丁工作结果：Outcome 决定弹窗/状态行；StaticRestored 说明本次操作
+        /// 是否顺带还原了残留的静态补丁（BepInEx 插件方式的附加动作）。
+        /// </summary>
+        private sealed class PatchResult
+        {
+            public PatchOutcome Outcome;
+            public bool StaticRestored;
         }
 
         private void InstallPatch()
         {
-            RunPatchingAsync(restoreBackup: false, install: true, verb: "安装");
+            RunPatchingAsync(install: true, verb: "安装");
         }
 
         private void UninstallPatch()
         {
-            RunPatchingAsync(restoreBackup: true, install: false, verb: "卸载");
+            RunPatchingAsync(install: false, verb: "卸载");
         }
 
         /// <summary>
@@ -370,28 +384,47 @@ namespace AicNoMosaic
         /// 就是这段同步跑在 UI 线程上）。UI 副作用（弹窗/状态栏）全部留在
         /// await 之后的主线程，工作函数 PerformPatchWork 纯计算/IO 无弹窗。
         /// </summary>
-        private async void RunPatchingAsync(bool restoreBackup, bool install, string verb)
+        private async void RunPatchingAsync(bool install, string verb)
         {
             SetButtonsEnabled(false);
-            _statusLabel.Text = "正在" + verb + "…（约 5~10 秒，窗口可自由拖动）";
+            _statusLabel.Text = "正在" + verb + "…";
             Cursor = Cursors.WaitCursor;
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                PatchOutcome outcome = await Task.Run(() => PerformPatchWork(restoreBackup, install));
+                PatchResult result = await Task.Run(() => PerformPatchWork(install));
                 stopwatch.Stop();
                 string elapsed = verb + "完成，耗时 " + stopwatch.Elapsed.TotalSeconds.ToString("0.0") + " 秒";
+                string staticNote = result.StaticRestored
+                    ? "\n此前安装的静态补丁已一并还原。"
+                    : "";
 
-                switch (outcome)
+                switch (result.Outcome)
                 {
-                    case PatchOutcome.Succeeded:
-                        MessageBox.Show(this, install ? "安装补丁成功！" : "卸载补丁成功！",
+                    case PatchOutcome.PluginDeployed:
+                        MessageBox.Show(this,
+                            "检测到 BepInEx，已释放去码插件到 BepInEx\\plugins\\。" +
+                            "\n免改游戏文件：游戏更新无需重打，卸载时删除插件即完全还原。" + staticNote,
                             "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         _statusLabel.Text = elapsed;
                         break;
 
-                    case PatchOutcome.RestoredFromBackup:
-                        MessageBox.Show(this, "已从备份还原原始游戏文件！",
+                    case PatchOutcome.PluginFresh:
+                        MessageBox.Show(this, "去码插件已是当前版本，无需重新释放。",
+                            "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        _statusLabel.Text = verb + "中止（已是目标状态）";
+                        break;
+
+                    case PatchOutcome.PluginRemoved:
+                        MessageBox.Show(this, "已移除 BepInEx 去码插件，游戏完全还原原状。" + staticNote,
+                            "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        _statusLabel.Text = elapsed;
+                        break;
+
+                    case PatchOutcome.Succeeded:
+                        MessageBox.Show(this,
+                            (install ? "安装补丁成功！" : "卸载补丁成功！")
+                            + (result.StaticRestored ? "\n此前残留的静态补丁状态已一并处理。" : ""),
                             "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         _statusLabel.Text = elapsed;
                         break;
@@ -455,13 +488,15 @@ namespace AicNoMosaic
 
         /// <summary>
         /// 补丁工作（纯 IO/dnlib，无 UI 副作用；在线程池上执行）。
-        /// 注意 install 语义：true=「安装去码」→ 马赛克禁用（mosaicEnabled=false）；卸载反之。
-        /// 附加职责：维持 _sha.txt（游戏防篡改校验清单）与 DLL 实际状态一致 ——
-        /// 更新 Assembly-CSharp 条目为新 SHA256；卸载还原时用 .orig 恢复原始清单。
+        /// 方式选择：检测到 BepInEx 框架（BepInEx/core/BepInEx.dll）时自动切换
+        /// 为插件方式 —— 释放内嵌插件到 BepInEx/plugins/，不改动游戏文件；
+        /// 此前若装过静态补丁则顺带还原。未检测到时走 dnlib 静态补丁流程。
+        /// 附加职责：维持 _sha.txt（游戏防篡改校验清单）与 DLL 实际状态一致。
         /// </summary>
-        private PatchOutcome PerformPatchWork(bool restoreBackup, bool install)
+        private PatchResult PerformPatchWork(bool install)
         {
-            if (!GameFiles.IsGameRoot(_gameRoot)) return PatchOutcome.NoGameRoot;
+            if (!GameFiles.IsGameRoot(_gameRoot))
+                return new PatchResult { Outcome = PatchOutcome.NoGameRoot };
 
             string dll = GameFiles.AssemblyPath(_gameRoot);
             string backup = GameFiles.BackupPath(_gameRoot);
@@ -469,50 +504,108 @@ namespace AicNoMosaic
             string sha = GameFiles.ShaManifestPath(_gameRoot);
             TryDeleteFile(temp);
 
-            if (GameFiles.IsFileInUse(dll)) return PatchOutcome.BlockedInUse;
+            if (GameFiles.IsFileInUse(dll))
+                return new PatchResult { Outcome = PatchOutcome.BlockedInUse };
 
-            // ---- 优先走备份还原路径 ----
-            if (restoreBackup && File.Exists(backup))
+            bool hasBepInEx = BepInExDeployer.IsFrameworkPresent(_gameRoot);
+
+            if (install)
+            {
+                // ---- 安装 · BepInEx 存在 → 插件方式（内容一致则幂等跳过）----
+                if (hasBepInEx)
+                {
+                    bool wrote = BepInExDeployer.ExtractPlugin(_gameRoot);
+                    // 顺带还原残留静态补丁：MosaicOn=原版无需处理；
+                    // NotFound/Error 也尝试还原（.bak 路径可救异常状态的 dll）
+                    bool staticRestored = false;
+                    if (MosaicPatcher.Inspect(dll) != MosaicPatcher.InspectState.MosaicOn)
+                        staticRestored = TryRestoreStaticPatch(dll, backup, sha, temp);
+                    return new PatchResult
+                    {
+                        Outcome = wrote ? PatchOutcome.PluginDeployed : PatchOutcome.PluginFresh,
+                        StaticRestored = staticRestored,
+                    };
+                }
+
+                // ---- 安装 · 静态方式：dnlib 进程内改 IL，输出到同目录临时文件 ----
+                var status = MosaicPatcher.Apply(dll, false, temp);   // false=马赛克禁用（去码）
+                switch (status)
+                {
+                    case MosaicPatcher.PatchStatus.NotFound:
+                        TryDeleteFile(temp);
+                        return new PatchResult { Outcome = PatchOutcome.NotFound };
+                    case MosaicPatcher.PatchStatus.AlreadyApplied:
+                        TryDeleteFile(temp);
+                        return new PatchResult { Outcome = PatchOutcome.AlreadyApplied };
+                    case MosaicPatcher.PatchStatus.IoError:
+                    case MosaicPatcher.PatchStatus.VerifyFailed:
+                        TryDeleteFile(temp);
+                        return new PatchResult { Outcome = PatchOutcome.VerifyOrIoFailed };
+                }
+
+                // Success：先备份原始 DLL（幂等，只备份一次），再原子替换。
+                // 只在「确实是原版状态」时备份，避免把已打补丁的文件误存为 .bak。
+                if (!File.Exists(backup)
+                    && MosaicPatcher.Inspect(dll) == MosaicPatcher.InspectState.MosaicOn)
+                {
+                    File.Copy(dll, backup, false);
+                }
+
+                ReplaceAtomically(temp, dll);
+
+                // ---- 维持 _sha.txt 一致性：登记打完补丁后的新 SHA256（非致命，失败不影响补丁） ----
+                string newSha = ShaManifest.ComputeFileSha256(dll);
+                if (newSha != null)
+                    ShaManifest.TryUpdateEntry(sha, ShaManifest.ManagedEntry, newSha);
+
+                return new PatchResult { Outcome = PatchOutcome.Succeeded };
+            }
+            else
+            {
+                // ---- 卸载：插件移除与静态还原两个维度各自判净，互不排斥 ----
+                bool removedPlugin = hasBepInEx && BepInExDeployer.RemovePlugin(_gameRoot);
+
+                // 静态：MosaicOn=已是原版无需处理；NotFound/Error 同样尝试还原（.bak 可救砖）
+                bool staticNeedsRestore = MosaicPatcher.Inspect(dll) != MosaicPatcher.InspectState.MosaicOn;
+                bool staticRestored = staticNeedsRestore && TryRestoreStaticPatch(dll, backup, sha, temp);
+
+                if (removedPlugin)
+                    return new PatchResult { Outcome = PatchOutcome.PluginRemoved, StaticRestored = staticRestored };
+                if (staticRestored)
+                    return new PatchResult { Outcome = PatchOutcome.Succeeded };
+                return new PatchResult { Outcome = PatchOutcome.AlreadyApplied };
+            }
+        }
+
+        /// <summary>
+        /// 还原静态补丁到原始 DLL（供插件安装顺带清理 / 卸载路径复用）。
+        /// 优先进 .bak 直接还原（对未知/损坏状态的 dll 也能救砖）；
+        /// 无 .bak 时用 dnlib 把补丁点翻回马赛克开启。返回是否做了实质还原。
+        /// </summary>
+        private static bool TryRestoreStaticPatch(string dll, string backup, string sha, string temp)
+        {
+            if (File.Exists(backup))
             {
                 File.Copy(backup, temp, true);
-                ReplaceAtomically(temp, dll);      // temp 被消费
+                ReplaceAtomically(temp, dll);          // temp 被消费
                 TryDeleteFile(backup);
                 ShaManifest.TryRestoreOriginal(sha);   // 校验清单同参还原（原始哈希表）
-                return PatchOutcome.RestoredFromBackup;
+                return true;
             }
 
-            // ---- dnlib 进程内改 IL，输出到同目录临时文件 ----
-            var status = MosaicPatcher.Apply(dll, !install, temp);
+            var status = MosaicPatcher.Apply(dll, true, temp);   // true=马赛克恢复
             switch (status)
             {
-                case MosaicPatcher.PatchStatus.NotFound:
+                case MosaicPatcher.PatchStatus.Success:
+                    ReplaceAtomically(temp, dll);
+                    string newSha = ShaManifest.ComputeFileSha256(dll);
+                    if (newSha != null)
+                        ShaManifest.TryUpdateEntry(sha, ShaManifest.ManagedEntry, newSha);
+                    return true;
+                default:
                     TryDeleteFile(temp);
-                    return PatchOutcome.NotFound;
-                case MosaicPatcher.PatchStatus.AlreadyApplied:
-                    TryDeleteFile(temp);
-                    return PatchOutcome.AlreadyApplied;
-                case MosaicPatcher.PatchStatus.IoError:
-                case MosaicPatcher.PatchStatus.VerifyFailed:
-                    TryDeleteFile(temp);
-                    return PatchOutcome.VerifyOrIoFailed;
+                    return false;
             }
-
-            // Success：先备份原始 DLL（幂等，只备份一次），再原子替换。
-            // 只在「确实是原版状态」时备份，避免把已打补丁的文件误存为 .bak。
-            if (!restoreBackup && !File.Exists(backup)
-                && MosaicPatcher.Inspect(dll) == MosaicPatcher.InspectState.MosaicOn)
-            {
-                File.Copy(dll, backup, false);
-            }
-
-            ReplaceAtomically(temp, dll);
-
-            // ---- 维持 _sha.txt 一致性：登记打完补丁后的新 SHA256（非致命，失败不影响补丁） ----
-            string newSha = ShaManifest.ComputeFileSha256(dll);
-            if (newSha != null)
-                ShaManifest.TryUpdateEntry(sha, ShaManifest.ManagedEntry, newSha);
-
-            return PatchOutcome.Succeeded;
         }
 
         /// <summary>关键优化 #5：用 File.Replace 做同卷近原子替换，中途断电也不会损坏游戏文件。</summary>
@@ -537,11 +630,21 @@ namespace AicNoMosaic
         }
 
         /// <summary>
-        /// 按补丁实际状态启用/禁用对应按钮：已补丁→只能卸载，原版→只能安装，
-        /// 未知→两个都允许尝试。修复：已安装时安装按钮仍然可点（点了必弹"已安装"）。
+        /// 按补丁实际状态启用/禁用对应按钮。
+        /// 静态方式：已补丁→只能卸载，原版→只能安装，未知→两个都允许尝试。
+        /// BepInEx 方式：安装=释放/更新插件（幂等，可重复）、卸载=移除插件+还原静态；
+        /// 两个维度互不排斥 → 两按钮一律可用，安装按钮换文案以提示方式差异。
         /// </summary>
-        private void ApplyButtonStates(MosaicPatcher.InspectState state)
+        private void ApplyButtonStates(MosaicPatcher.InspectState state, bool hasBepInEx)
         {
+            if (hasBepInEx)
+            {
+                _installButton.Text = "② 释放去码插件";
+                _installButton.Enabled = true;
+                _uninstallButton.Enabled = true;
+                return;
+            }
+            _installButton.Text = "② 安装去码补丁";
             switch (state)
             {
                 case MosaicPatcher.InspectState.MosaicOff:    // 已补丁
@@ -567,6 +670,7 @@ namespace AicNoMosaic
             if (!GameFiles.IsGameRoot(_gameRoot))
             {
                 _stateLabel.Text = "未找到游戏";
+                _installButton.Text = "② 安装去码补丁";
                 return;
             }
             _stateLabel.Text = "检测中…";
@@ -582,8 +686,24 @@ namespace AicNoMosaic
                 state = MosaicPatcher.InspectState.Error;
             }
 
+            // BepInEx/插件存在性 = 两个 File.Exists（毫秒级），留 UI 线程即可
+            bool hasBepInEx = BepInExDeployer.IsFrameworkPresent(_gameRoot);
+            bool hasPlugin = hasBepInEx && BepInExDeployer.IsPluginInstalled(_gameRoot);
+
             string text;
-            switch (state)
+            if (hasPlugin)
+            {
+                text = state == MosaicPatcher.InspectState.MosaicOff
+                    ? "已安装插件（BepInEx 运行时去码）+ 残留静态补丁"
+                    : "已安装插件（BepInEx 运行时去码）";
+            }
+            else if (hasBepInEx)
+            {
+                text = state == MosaicPatcher.InspectState.MosaicOff
+                    ? "已安装补丁（去码生效）"
+                    : "未安装（检测到 BepInEx：安装=释放插件）";
+            }
+            else switch (state)
             {
                 case MosaicPatcher.InspectState.MosaicOff: text = "已安装补丁（去码生效）"; break;
                 case MosaicPatcher.InspectState.MosaicOn: text = "未安装（原始状态）"; break;
@@ -591,7 +711,7 @@ namespace AicNoMosaic
                 default: text = "未知（读取失败）"; break;
             }
             _stateLabel.Text = text;
-            ApplyButtonStates(state);   // 状态和按钮可用性同步
+            ApplyButtonStates(state, hasBepInEx);   // 状态和按钮可用性同步
         }
 
         private void ShowDebugSettings()

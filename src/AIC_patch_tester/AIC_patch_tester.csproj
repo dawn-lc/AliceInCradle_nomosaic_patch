@@ -25,6 +25,7 @@
     <Compile Include="..\AIC_nomosaic_tool\DebugConfig.cs" Link="DebugConfig.cs" />
     <Compile Include="..\AIC_nomosaic_tool\GameVersion.cs" Link="GameVersion.cs" />
     <Compile Include="..\AIC_nomosaic_tool\ShaManifest.cs" Link="ShaManifest.cs" />
+    <Compile Include="..\AIC_nomosaic_tool\BepInExDeployer.cs" Link="BepInExDeployer.cs" />
   </ItemGroup>
 
 </Project>
