@@ -217,11 +217,7 @@ namespace AicNoMosaic
             {
                 Text = text,
                 Font = font,
-                AutoSize = false,
-                Width = 320,                      // 与 infoGrid 绝对列宽同步
-                Height = 20,
-                TextAlign = ContentAlignment.MiddleLeft,
-                AutoEllipsis = true,
+                AutoSize = true,                  // 标签贴内容宽度（"游戏版本："≈5字），绝不留大空白
                 Margin = new Padding(0, 7, 0, 2),
             };
         }
