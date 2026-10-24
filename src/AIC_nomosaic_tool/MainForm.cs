@@ -49,6 +49,10 @@ namespace AicNoMosaic
             // 导致窗体塌陷 —— 此前两次翻车均源于此），嵌套 Grid 一律 AutoSize+GrowAndShrink。
             AutoSize = true;
             AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            // 标题栏：无图标、无最大化/最小化（仅留 ✕；退出另有 文件→退出）
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowIcon = false;
             StartPosition = FormStartPosition.CenterScreen;
             Font = baseFont;
             AllowDrop = true;
@@ -66,7 +70,7 @@ namespace AicNoMosaic
             menu.Items.Add(fileMenu);
             menu.Items.Add(toolsMenu);
             menu.Items.Add(helpMenu);
-            MainMenuStrip = menu;   // Controls.Add(menu) 移至 root 之后：后加者先布局、贴顶
+            MainMenuStrip = menu;   // 挂菜单源与 Alt 快捷键；控件本体作 root 首行（见下）
 
             /*
              * 相对定位布局（全 WinForms 内建，无一处像素坐标）：
@@ -85,7 +89,6 @@ namespace AicNoMosaic
                 Padding = new Padding(24, 8, 24, 12),   // 左右对称 —— 内容居中不偏轴
             };
             root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            Controls.Add(menu);      // 后加者先布局：MenuStrip 贴顶，root 从其下方开始
             Controls.Add(root);
 
             int rowIndex = 0;
@@ -94,6 +97,9 @@ namespace AicNoMosaic
                 root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
                 root.Controls.Add(control, 0, rowIndex++);
             }
+
+            // ---- 首行：MenuStrip 作普通行，消除与标题的遮挡；MainMenuStrip 仍生效 ----
+            AddRow(menu);
 
             // ── 标题区（Anchor=None → 在 100% 宽单元格里水平居中）──
             _titleLabel = new Label
