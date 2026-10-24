@@ -58,8 +58,6 @@ namespace AicNoMosaic
             AllowDrop = true;
 
             var menu = new MenuStrip();
-            var fileMenu = new ToolStripMenuItem("文件(&F)");
-            fileMenu.DropDownItems.Add(new ToolStripMenuItem("退出(&X)", null, (s, e) => Close()));
             var toolsMenu = new ToolStripMenuItem("工具(&T)");
             toolsMenu.DropDownItems.Add(new ToolStripMenuItem("游戏调试设置(&D)", null, (s, e) => ShowDebugSettings()));
             var helpMenu = new ToolStripMenuItem("帮助(&H)");
@@ -67,7 +65,6 @@ namespace AicNoMosaic
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("更新本工具(&U)", null, (s, e) => OpenUrl(ReleasesUrl)));
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("版本信息(&V)", null, (s, e) => ShowAbout()));
             helpMenu.DropDownItems.Add(new ToolStripMenuItem("版本检测诊断(&G)", null, (s, e) => ShowVersionDiagnostics()));
-            menu.Items.Add(fileMenu);
             menu.Items.Add(toolsMenu);
             menu.Items.Add(helpMenu);
             MainMenuStrip = menu;   // 挂菜单源与 Alt 快捷键；控件本体作 root 首行（见下）
