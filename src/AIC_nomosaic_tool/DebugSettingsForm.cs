@@ -19,9 +19,10 @@ namespace AicNoMosaic
             _configPath = configPath;
 
             Text = "游戏调试设置";
-            // 尺寸策略同主窗：宽度固定、高度在 Shown 后按 root 实际渲染高度收紧
-            ClientSize = new Size(446, 360);
-            FormBorderStyle = FormBorderStyle.FixedSingle;
+            // 官方 AutoSize 写法（同主窗）：尺寸完全由内容驱动，
+            // MinimumSize/MaximumSize 仍会被尊重，Size 属性被忽略
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
@@ -31,8 +32,8 @@ namespace AicNoMosaic
             // Dock=Top + AutoSize 列而非 Dock.Fill：否则无约束测宽退化、窗体堑陷
             var root = new TableLayoutPanel
             {
-                Dock = DockStyle.Top,
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 ColumnCount = 1,
                 Padding = new Padding(26, 14, 26, 14),
             };
@@ -92,20 +93,18 @@ namespace AicNoMosaic
                 _boxes[i] = box;
             }
 
-            // 保存/放弃：嵌套 Grid 两列各 50%，按钮 Dock 撑满
+            // 保存/放弃：嵌套 Grid 两列 AutoSize（按按钮内容定宽），Anchor=None 居中
             var saveButton = new Button
             {
                 Text = "保存设置",
-                Dock = DockStyle.Fill,
-                Height = 32,
+                AutoSize = true,
                 Margin = new Padding(0, 18, 8, 0),
             };
             saveButton.Click += (s, e) => Save();
             var cancelButton = new Button
             {
                 Text = "放弃更改",
-                Dock = DockStyle.Fill,
-                Height = 32,
+                AutoSize = true,
                 Margin = new Padding(8, 18, 0, 0),
             };
             cancelButton.Click += (s, e) => Close();
@@ -116,10 +115,10 @@ namespace AicNoMosaic
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Margin = new Padding(0),
-                Anchor = AnchorStyles.None,       // 与主窗同一套参考系，中轴对齐
+                Anchor = AnchorStyles.None,
             };
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             buttonGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             buttonGrid.Controls.Add(saveButton, 0, 0);
             buttonGrid.Controls.Add(cancelButton, 1, 0);
@@ -133,13 +132,6 @@ namespace AicNoMosaic
                 AutoSize = true,
                 Margin = new Padding(0, 10, 0, 0),
             });
-
-            // 高度自适应：Shown 时按 root 实际渲染高度收紧客户区
-            Shown += (s, e) =>
-            {
-                ClientSize = new Size(446, root.Height);
-                CenterToParent();
-            };
 
             Load += (s, e) => LoadConfig();
             FormClosing += (s, e) =>

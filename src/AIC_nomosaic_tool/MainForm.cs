@@ -43,12 +43,12 @@ namespace AicNoMosaic
             Font smallFont = new Font("Microsoft YaHei", 8.5F);
 
             Text = "Alice In Cradle 补丁工具 " + AppVersion;
-            // 尺寸策略：宽度固定合理值；高度在 Shown（完成布局）后按 root 实际渲染高度收紧。
-            // 不用 Form AutoSize：它在 TLP(AutoSize 列/Dock) 嵌套下首选尺寸测量不可靠，
-            // 实测先后出现高度塌陷（Dock.Fill+百分比列）与宽度塌陷（AutoSize 列）
-            ClientSize = new Size(540, 400);
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
+            // 官方 AutoSize 写法（Form.AutoSize 文档）：AutoSize + AutoSizeMode=GrowAndShrink，
+            // MinimumSize/MaximumSize 会被尊重而 Size 一律被忽略 —— 窗体尺寸完全由内容驱动。
+            // 关键约束：子容器绝不能含 Dock=Fill 子项（会把容器的 PreferredSize 高度压成 0，
+            // 导致窗体塌陷 —— 此前两次翻车均源于此），嵌套 Grid 一律 AutoSize+GrowAndShrink。
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
             StartPosition = FormStartPosition.CenterScreen;
             Font = baseFont;
             AllowDrop = true;
@@ -78,17 +78,14 @@ namespace AicNoMosaic
              */
             var root = new TableLayoutPanel
             {
-                // Dock=Top + AutoSize=true：行高按内容撑出，root.Height 即真实内容高度
-                //（在 Shown 时读取它来收紧窗体高度；宽度不受 AutoSize 测量影响）
-                Dock = DockStyle.Top,
+                // 官方 AutoSize 测量链要求：容器自带 AutoSize+GrowAndShrink（不能被 Dock=Fill 短路）
                 AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 ColumnCount = 1,
-                Padding = new Padding(24, 8, 24, 12),   // 左右对称 —— 列宽由内容定，退让不偏轴
+                Padding = new Padding(24, 8, 24, 12),   // 左右对称 —— 内容居中不偏轴
             };
-            // 列宽由最宽子控件决定；居中控件用 Anchor=None 在列内居中
             root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             Controls.Add(root);
-            Controls.Add(menu);           // 后加 → 先布局 → 菜单贴顶，root 从菜单下沿开始
 
             int rowIndex = 0;
             void AddRow(Control control)
@@ -142,11 +139,11 @@ namespace AicNoMosaic
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
                 Margin = new Padding(0),
-                Anchor = AnchorStyles.None,       // ← 无则整块贴列左（截图不居中的主因）
+                Anchor = AnchorStyles.None,       // 所有块都在列内居中，同一参考系
             };
-            // 全 Absolute 列：百分比列在无约束测宽下退化；数值列固定宽 + Dock.Fill + AutoEllipsis 效果不变
-            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
-            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
+            // 全 AutoSize 列：中间列宽由内容决定，数列在 AutoEllipsis 控制下不溢出
+            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            infoGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             infoGrid.Controls.Add(InfoKey("游戏版本：", baseFont), 0, 0);
             infoGrid.Controls.Add(_versionLabel, 1, 0);
             infoGrid.Controls.Add(InfoKey("游戏路径：", baseFont), 0, 1);
@@ -180,24 +177,21 @@ namespace AicNoMosaic
                 Margin = new Padding(0),
                 Anchor = AnchorStyles.None,       // 与 infoGrid 同参考系，两块中轴对齐
             };
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
-            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            buttonGrid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             buttonGrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             buttonGrid.Controls.Add(_installButton, 0, 0);
             buttonGrid.Controls.Add(_uninstallButton, 1, 0);
             AddRow(buttonGrid);
 
-            // ── ④ 动态状态（安装中/完成/失败），紧贴操作区，随窗宽伸缩 ──
-            // AutoSize=false 才能让 AutoEllipsis 生效；Dock=Fill 占满 AutoSize 列宽
+            // ── 动态状态（安装中/完成/失败），紧贴操作区 ──
             _statusLabel = new Label
             {
                 Text = "",
                 Font = smallFont,
                 ForeColor = Color.DimGray,
-                Dock = DockStyle.Fill,
-                AutoSize = false,
-                Height = 20,
-                AutoEllipsis = true,
+                AutoSize = true,
+                AutoEllipsis = false,
                 Margin = new Padding(0, 10, 0, 0),
             };
             AddRow(_statusLabel);
@@ -213,14 +207,6 @@ namespace AicNoMosaic
                 Margin = new Padding(0, 6, 0, 0),
             };
             AddRow(tip);
-
-            // 高度自适应：Shown 时内容已完成布局，用 root 实际渲染高度收紧客户区
-            //（杜绝对高度导致的底部空白，也比 Form AutoSize 可靠——宽度不参与自测）
-            Shown += (s, e) =>
-            {
-                ClientSize = new Size(540, menu.Height + root.Height);
-                CenterToScreen();
-            };
         }
 
         private static Label InfoKey(string text, Font font)
