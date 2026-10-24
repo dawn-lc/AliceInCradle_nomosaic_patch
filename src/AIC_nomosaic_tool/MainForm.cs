@@ -187,15 +187,17 @@ namespace AicNoMosaic
             buttonGrid.Controls.Add(_uninstallButton, 1, 0);
             AddRow(buttonGrid);
 
-            // ── 动态状态（安装中/完成/失败），紧贴操作区；固定宽+Ellipsis 防撑爆 ──
+            // ── 动态状态（安装中/完成/失败），紧贴操作区 ──
+            // AutoSize 跟随文本完整显示：状态文本全部由本工具产生且短于按钮行撑出的
+            // 列宽（最长"正在安装…（约 5~10 秒，…）"≈220px < ~408px），无撑爆风险；
+            // 此前 AutoSize=false 使标签回落到 100px 默认宽 + Ellipsis，导致
+            // "卸载完成，耗时…"在右侧大半空隙下仍被截成省略号。
             _statusLabel = new Label
             {
                 Text = "",
                 Font = smallFont,
                 ForeColor = Color.DimGray,
-                AutoSize = false,
-                Height = 20,
-                AutoEllipsis = true,
+                AutoSize = true,
                 Margin = new Padding(0, 10, 0, 0),
             };
             AddRow(_statusLabel);
