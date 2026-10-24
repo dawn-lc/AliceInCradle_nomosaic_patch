@@ -13,9 +13,10 @@ namespace AicPatchTester
     /// <summary>
     /// 补丁逻辑验证器：对传入的 Assembly-CSharp.dll 依次执行
     ///   1) Inspect 读取当前状态
-    ///   2) Apply 翻转到"恢复马赛克"(true)   —— 应 Success（仓库内 DLL 均为已安装状态）
+    ///   2) Apply 翻转到相反状态 —— 应 Success
+    ///      （状态自适应：仓库内已安装副本 Off→On；用户原始游戏 DLL On→Off）
     ///   3) Inspect 确认已翻转
-    ///   4) Apply 再次翻转 true             —— 应 AlreadyApplied（幂等）
+    ///   4) Apply 同方向再次翻转           —— 应 AlreadyApplied（幂等）
     /// 返回非 0 表示有失败，用于 CI 断言。
     /// </summary>
     internal static class Program
@@ -81,13 +82,14 @@ namespace AicPatchTester
                 string temp2 = dll + ".tester_flip2";
                 try
                 {
-                    // 1) 翻转到"恢复马赛克" = true（相当于卸载语义）
-                    var r1 = MosaicPatcher.Apply(dll, true, temp1);
-                    Console.WriteLine("   翻转 true -> " + r1);
+                    // 1) 翻转到相反状态（目标方向自适应初始状态，两种来源均支持）
+                    bool targetMosaic = state0 == MosaicPatcher.InspectState.MosaicOff;
+                    var r1 = MosaicPatcher.Apply(dll, targetMosaic, temp1);
+                    Console.WriteLine("   翻转 " + targetMosaic + " -> " + r1);
                     if (r1 != MosaicPatcher.PatchStatus.Success) { failures++; continue; }
 
                     MosaicPatcher.InspectState state1 = MosaicPatcher.Inspect(temp1);
-                    bool expectedOn = state0 == MosaicPatcher.InspectState.MosaicOff;   // off -> on 才算对
+                    bool expectedOn = targetMosaic;   // 翻转后应恰为目标状态
                     Console.WriteLine("   翻转后状态: " + state1);
                     if ((state1 == MosaicPatcher.InspectState.MosaicOn) != expectedOn)
                     {
@@ -98,7 +100,7 @@ namespace AicPatchTester
 
                     // 2) 再翻转一次（幂等性）
                     // 注意：AlreadyApplied 时不产生输出文件，状态检查回退到输入文件
-                    var r2 = MosaicPatcher.Apply(temp1, true, temp2);
+                    var r2 = MosaicPatcher.Apply(temp1, targetMosaic, temp2);
                     Console.WriteLine("   重复应用 -> " + r2);
                     string secondFile;
                     if (r2 == MosaicPatcher.PatchStatus.AlreadyApplied)

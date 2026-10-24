@@ -20,6 +20,22 @@ namespace AicNoMosaic
     /// 其它加固：校验返回类型必须是 System.Boolean；类型名大小写不敏感、
     /// GetTypes() 覆盖嵌套类型；同名歧义时按"调用点数量"裁决（没有调用者的
     /// 同名方法是冒牌的）；写出后重新读出自校验。
+    ///
+    /// 0.30i 实测方法结构（dnlib 探针验证，330 条 IL），三个早退分支各有明确语义，
+    /// 补丁只动尾部返回常量，严禁把补丁点改到前两个分支上：
+    ///   [0-2]   if (!use_mosaic) return false
+    ///           —— use_mosaic 是运行时状态位：setTarget 里按
+    ///           "当前目标 countMosaic() > 0" 自动计算，同时经 FtMosaic.get_activated
+    ///           被 FatalShower.fineScreenSize / GetMosaicLayer / FtMosaic.isEnabled
+    ///           消费。硬改此分支会波及游戏其它系统的逻辑分支。
+    ///   [10-14] if (!enabled) return true
+    ///           —— enabled 是 UI 生命周期同步位：ctor 置 true，
+    ///           UIBase.OnEnable/OnDisable/activateCurrentUIPict 经
+    ///           UIPictureBase.set_mosaic_enabled 广播同步。它不是设置项，
+    ///           与 _debug.txt / PlayerPrefs 无关（已全面追踪，无外部开关）。
+    ///   [328-329] { ldc.i4.1, ret }（330 条版本的尾部返回；0.29 的 55 条短版本
+    ///           尾部常量方向相反）—— 主策略翻转时自适应方向，不硬编码 0→1 还是
+    ///           1→0，这是跨版本设计的核心。
     /// </summary>
     public static class MosaicPatcher
     {
