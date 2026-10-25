@@ -52,7 +52,7 @@ dotnet build src/AIC_nomosaic_bepinex -c Release
 安装：
 1. 安装 [BepInEx 5.4.22 x64](https://github.com/BepInEx/BepInEx/releases)（Unity Mono 版）到游戏目录，先启动一次游戏完成初始化；
 2. 把 `AIC_nomosaic_bepinex.dll` 放进 `BepInEx/plugins/`；
-3. 开关：`BepInEx/config/com.lhycloud.aic.nomosaic.cfg`（或 F1 配置管理器热切换）。
+3. 开关：`BepInEx/config/me.dawnlc.aic.nomosaic.cfg`（或 F1 配置管理器热切换）。
 
 找不到 `MosaicShower.FnDrawMosaic` 时插件只写日志、不打补丁、不崩溃（`TargetMethod()`/`Prepare` 防护）。
 

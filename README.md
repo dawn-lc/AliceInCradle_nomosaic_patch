@@ -22,7 +22,7 @@ Alice In Cradle(AIC)（摇篮里的爱丽丝）去除马赛克补丁
  - 工具释放插件到 BepInEx/plugins/AIC_nomosaic_bepinex.dll，不改任何游戏文件
  - 运行时 Harmony 拦截 nel.MosaicShower.FnDrawMosaic（Prefix 短路原方法体）——
    游戏更新免重打，删除插件文件即完全还原
- - 开关热切换：BepInEx/config/com.lhycloud.aic.nomosaic.cfg 或 ConfigurationManager(F1)
+ - 开关热切换：BepInEx/config/me.dawnlc.aic.nomosaic.cfg 或 ConfigurationManager(F1)
 
 2.版本检测  
  - 读取文件夹名称

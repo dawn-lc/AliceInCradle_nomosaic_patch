@@ -14,7 +14,7 @@ namespace AicNoMosaic.BepInEx
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     public sealed class NoMosaicPlugin : BaseUnityPlugin
     {
-        public const string PluginGuid = "com.lhycloud.aic.nomosaic";
+        public const string PluginGuid = "me.dawnlc.aic.nomosaic";
         public const string PluginName = "AIC NoMosaic";
         public const string PluginVersion = "2.3.0";
 

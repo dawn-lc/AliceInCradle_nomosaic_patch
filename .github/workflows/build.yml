@@ -74,7 +74,7 @@ jobs:
             一键安装/卸载去码补丁；检测到 BepInEx 时自动切换为释放插件方式
             （免改游戏文件，游戏更新免重打）
           - `AIC_nomosaic_bepinex.dll` — BepInEx 运行时插件（也可手动放到
-            `BepInEx/plugins/`；配置见 `BepInEx/config/com.lhycloud.aic.nomosaic.cfg`）
+            `BepInEx/plugins/`；配置见 `BepInEx/config/me.dawnlc.aic.nomosaic.cfg`）
 
           SHA256 校验值见 Release 资产详情（GitHub 原生提供）。
 
