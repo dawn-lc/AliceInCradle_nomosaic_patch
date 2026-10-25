@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [ main, modernization ]
+    tags: [ 'v*' ]          # 推 v 开头的 tag（如 v2.3.0）→ 自动构建并发布 Release
   pull_request:
   workflow_dispatch:
 
@@ -60,3 +61,41 @@ jobs:
         with:
           name: AIC_nomosaic_release
           path: dist/
+
+      # —— tag 推送：GitHub CLI（runner 预装 gh，GITHUB_TOKEN 免配置）自动创建 Release ——
+      # pwsh 无 heredoc：body 先临时落盘再 --notes-file，产物用 dist 目录通配
+      - name: Write release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          @'
+          自动构建发布（CI 全部检查通过后自动上传）。
+
+          ## 内容
+          - `AIC_nomosaic_tool.exe` — 图形界面补丁工具：选择游戏 exe/目录（或拖入），
+            一键安装/卸载去码补丁；检测到 BepInEx 时自动切换为释放插件方式
+            （免改游戏文件，游戏更新免重打）
+          - `AIC_nomosaic_bepinex.dll` — BepInEx 运行时插件（也可手动放到
+            `BepInEx/plugins/`；配置见 `BepInEx/config/com.lhycloud.aic.nomosaic.cfg`）
+          - `SHA256SUMS` — 产物 SHA256 清单（`certutil -hashfile <文件> SHA256` 核对）
+
+          ## 使用
+          1. 下载 `AIC_nomosaic_tool.exe`，放到游戏目录（或任意位置）运行
+          2. 选择游戏目录（或把游戏 exe 拖进窗口）
+          3. 点"安装去码补丁"（或检测到 BepInEx 时"释放去码插件"）
+
+          游戏：Alice In Cradle ver023～030+（支持未来版本自动定位）。
+          卸载：工具内一键卸载（还原备份/删除插件），或在
+          `BepInEx/plugins/` 中删除 AIC_nomosaic_bepinex.dll。
+          '@ | Set-Content -Path release_notes.md -Encoding utf8
+
+      - name: Release (gh cli)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" `
+            --title "AIC_nomosaic $env:GITHUB_REF_NAME" `
+            --notes-file release_notes.md `
+            dist/AIC_nomosaic_tool.exe dist/AIC_nomosaic_bepinex.dll dist/SHA256SUMS
