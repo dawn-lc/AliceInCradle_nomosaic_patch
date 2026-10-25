@@ -44,18 +44,13 @@ jobs:
         run: |
           dotnet src/AIC_patch_tester/bin/Release/net10.0/AIC_patch_tester.dll testdlls/ver027b/Assembly-CSharp.dll testdlls/ver028b/Assembly-CSharp.dll testdlls/ver029b2/Assembly-CSharp.dll
 
-      # —— 发布产物 + SHA256SUMS（任何人都可一键验证完整性）——
+      # —— 发布产物（GitHub 原生提供 Release 资产的 SHA256，无需自生成清单）——
       - name: Stage artifacts
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item src/AIC_nomosaic_tool/bin/Release/net48/AIC_nomosaic_tool.exe dist/
           Copy-Item src/AIC_nomosaic_bepinex/bin/Release/net48/AIC_nomosaic_bepinex.dll dist/
-          Push-Location dist
-          Get-ChildItem -File | Get-FileHash -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  $($_.Path | Split-Path -Leaf)" } | Set-Content SHA256SUMS
-          Pop-Location
-          Get-Content dist/SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
@@ -77,7 +72,8 @@ jobs:
             （免改游戏文件，游戏更新免重打）
           - `AIC_nomosaic_bepinex.dll` — BepInEx 运行时插件（也可手动放到
             `BepInEx/plugins/`；配置见 `BepInEx/config/com.lhycloud.aic.nomosaic.cfg`）
-          - `SHA256SUMS` — 产物 SHA256 清单（`certutil -hashfile <文件> SHA256` 核对）
+
+          SHA256 校验值见 Release 资产详情（GitHub 原生提供）。
 
           ## 使用
           1. 下载 `AIC_nomosaic_tool.exe`，放到游戏目录（或任意位置）运行
@@ -98,4 +94,4 @@ jobs:
           gh release create "$env:GITHUB_REF_NAME" `
             --title "AIC_nomosaic $env:GITHUB_REF_NAME" `
             --notes-file release_notes.md `
-            dist/AIC_nomosaic_tool.exe dist/AIC_nomosaic_bepinex.dll dist/SHA256SUMS
+            dist/AIC_nomosaic_tool.exe dist/AIC_nomosaic_bepinex.dll
