@@ -12,7 +12,7 @@ namespace AicNoMosaic
         private static void Main()
         {
             bool createdNew;
-            using (Mutex mutex = new Mutex(true, "LhyCloud_AIC_Nomosaic_V2_Mutex", out createdNew))
+            using (Mutex mutex = new Mutex(true, "DawnLC_AIC_Nomosaic_V2_Mutex", out createdNew))
             {
                 if (!createdNew)
                 {

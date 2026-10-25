@@ -14,8 +14,8 @@ namespace AicNoMosaic
     internal sealed class MainForm : Form
     {
         private const string AppVersion = "v2.0.0";
-        private const string ReleasesUrl = "https://github.com/LhyCloud/AliceInCradle_nomosaic_patch/releases";
-        private const string ReadmeUrl = "https://github.com/LhyCloud/AliceInCradle_nomosaic_patch/blob/main/README.md";
+        private const string ReleasesUrl = "https://github.com/dawn-lc/AliceInCradle_nomosaic_patch/releases";
+        private const string ReadmeUrl = "https://github.com/dawn-lc/AliceInCradle_nomosaic_patch/blob/main/README.md";
 
         private Label _titleLabel;
         private Label _versionLabel;
@@ -715,7 +715,7 @@ namespace AicNoMosaic
         {
             MessageBox.Show(
                 "补丁工具版本：" + AppVersion + "（C# WinForms 单文件重写）\n" +
-                "上游项目：LhyCloud/AliceInCradle_nomosaic_patch\n" +
+                "本工具仓库：dawn-lc/AliceInCradle_nomosaic_patch（fork 自 LhyCloud）\n" +
                 "补丁方式：dnlib 进程内修改 MosaicShower.FnDrawMosaic 返回值\n" +
                 "兼容游戏版本：0.21 及之后的版本（自动检测）",
                 "版本信息", MessageBoxButtons.OK, MessageBoxIcon.Information);
