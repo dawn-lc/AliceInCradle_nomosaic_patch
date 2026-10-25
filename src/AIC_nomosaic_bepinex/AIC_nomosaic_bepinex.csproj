@@ -9,7 +9,7 @@
     <TargetFramework>net48</TargetFramework>
     <AssemblyName>AIC_nomosaic_bepinex</AssemblyName>
     <RootNamespace>AicNoMosaic.BepInEx</RootNamespace>
-    <Version>2.3.0</Version>
+    <Version>2.4.0</Version>
     <Description>Alice In Cradle 去马赛克 BepInEx 运行时插件（HarmonyX，游戏更新免重装；单点精准定位+LogInfo 诊断+AssemblyResolve 自动补装配；注入后游戏内显示状态横幅）</Description>
     <LangVersion>7.3</LangVersion>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>

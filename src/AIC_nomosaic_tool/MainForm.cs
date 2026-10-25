@@ -13,7 +13,7 @@ namespace AicNoMosaic
     /// </summary>
     internal sealed class MainForm : Form
     {
-        private const string AppVersion = "v2.0.0";
+        private const string AppVersion = "v2.4.0";
         private const string ReleasesUrl = "https://github.com/dawn-lc/AliceInCradle_nomosaic_patch/releases";
         private const string ReadmeUrl = "https://github.com/dawn-lc/AliceInCradle_nomosaic_patch/blob/main/README.md";
 

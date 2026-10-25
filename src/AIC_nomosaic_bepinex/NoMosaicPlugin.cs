@@ -16,7 +16,7 @@ namespace AicNoMosaic.BepInEx
     {
         public const string PluginGuid = "me.dawnlc.aic.nomosaic";
         public const string PluginName = "AIC NoMosaic";
-        public const string PluginVersion = "2.3.0";
+        public const string PluginVersion = "2.4.0";
 
         internal ConfigEntry<bool> Enabled;
         internal static NoMosaicPlugin Instance { get; private set; }
